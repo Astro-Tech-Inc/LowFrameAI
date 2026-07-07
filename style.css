@@ -409,12 +409,42 @@ label,
   border-radius: 6px;
 }
 
-.generated-video {
-  display: block;
-  width: min(100%, 720px);
-  max-height: 70vh;
+.fetch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+}
+
+.fetch-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid var(--line);
   border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 6px;
+  text-decoration: none;
+}
+
+.fetch-card img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 4px;
   background: #000;
+}
+
+.fetch-card span,
+.fetch-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fetch-card small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .image-bubble {

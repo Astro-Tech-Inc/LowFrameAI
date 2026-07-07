@@ -10,6 +10,7 @@ const sourcesList = document.querySelector("#sources-list");
 const closeSources = document.querySelector("#close-sources");
 const accountStatus = document.querySelector("#account-status");
 const loginOpen = document.querySelector("#login-open");
+const signupOpen = document.querySelector("#signup-open");
 const logoutButton = document.querySelector("#logout-button");
 const authDialog = document.querySelector("#auth-dialog");
 const closeAuth = document.querySelector("#close-auth");
@@ -73,13 +74,15 @@ function setSessionToken(token) {
 function updateAccountUi(user = currentUser) {
   currentUser = user;
   if (user) {
-    accountStatus.textContent = user.username || user.email || "Account";
-    loginOpen.classList.add("hidden");
-    logoutButton.classList.remove("hidden");
+    if (accountStatus) accountStatus.textContent = user.username || user.email || "Account";
+    loginOpen?.classList.add("hidden");
+    signupOpen?.classList.add("hidden");
+    logoutButton?.classList.remove("hidden");
   } else {
-    accountStatus.textContent = "Guest";
-    loginOpen.classList.remove("hidden");
-    logoutButton.classList.add("hidden");
+    if (accountStatus) accountStatus.textContent = "Guest";
+    loginOpen?.classList.remove("hidden");
+    signupOpen?.classList.remove("hidden");
+    logoutButton?.classList.add("hidden");
   }
 }
 
@@ -3490,20 +3493,21 @@ function clearUploads() {
   uploadPreview.innerHTML = "";
 }
 
-closeSources.addEventListener("click", () => sourcesDialog.close());
+closeSources?.addEventListener("click", () => sourcesDialog.close());
 
-loginOpen.addEventListener("click", () => openAuth("login"));
-closeAuth.addEventListener("click", () => authDialog.close());
+loginOpen?.addEventListener("click", () => openAuth("login"));
+signupOpen?.addEventListener("click", () => openAuth("signup"));
+closeAuth?.addEventListener("click", () => authDialog.close());
 
 for (const button of document.querySelectorAll(".auth-tab")) {
   button.addEventListener("click", () => setAuthTab(button.dataset.authTab));
 }
 
-githubLogin.addEventListener("click", () => {
+githubLogin?.addEventListener("click", () => {
   window.location.href = new URL("login/github", AUTH_API_URL).toString();
 });
 
-loginForm.addEventListener("submit", async (event) => {
+loginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   authMessage("login-message", "Logging in...");
   try {
@@ -3523,7 +3527,7 @@ loginForm.addEventListener("submit", async (event) => {
   }
 });
 
-signupForm.addEventListener("submit", async (event) => {
+signupForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   authMessage("signup-message", "Creating account...");
   try {
@@ -3545,7 +3549,7 @@ signupForm.addEventListener("submit", async (event) => {
   }
 });
 
-recoverForm.addEventListener("submit", async (event) => {
+recoverForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   authMessage("recover-message", "Resetting password...");
   try {
@@ -3565,7 +3569,7 @@ recoverForm.addEventListener("submit", async (event) => {
   }
 });
 
-logoutButton.addEventListener("click", async () => {
+logoutButton?.addEventListener("click", async () => {
   try {
     await authRequest("logout", { method: "POST" });
   } catch {
@@ -3575,7 +3579,7 @@ logoutButton.addEventListener("click", async () => {
   updateAccountUi(null);
 });
 
-downloadRecovery.addEventListener("click", () => {
+downloadRecovery?.addEventListener("click", () => {
   const blob = new Blob([recoveryCodesText(pendingRecoveryCodes)], { type: "text/plain" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);

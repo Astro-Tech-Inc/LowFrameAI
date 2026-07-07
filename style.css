@@ -103,12 +103,17 @@ textarea:focus {
 }
 
 .chat-panel {
+  grid-column: 2;
   display: grid;
   grid-template-rows: auto 1fr auto;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.history-panel.hidden + .chat-panel {
+  grid-column: 1 / -1;
 }
 
 .topbar {
@@ -724,6 +729,7 @@ dialog header {
   }
 
   .chat-panel {
+    grid-column: 1;
     min-height: 70vh;
   }
 }

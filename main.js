@@ -54,20 +54,16 @@ let savedChats = [];
 let pendingRecoveryCodes = [];
 
 const ATHENA_MODELS = {
-  "athena-s1": { label: "Athena-S1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
-  "athena-s1-d": { label: "Athena-S1-D", account: false, deep: false, direct: true, sourceLimit: 14, smart: false },
-  "athena-d1": { label: "Athena-D1", account: false, deep: true, direct: false, sourceLimit: 30, smart: false },
-  "athena-d1-d": { label: "Athena-D1-D", account: false, deep: true, direct: true, sourceLimit: 30, smart: false },
-  "athena-s2": { label: "Athena-S2", account: true, deep: false, direct: false, sourceLimit: 60, smart: true },
-  "athena-s2-d": { label: "Athena-S2-D", account: true, deep: false, direct: true, sourceLimit: 80, smart: true },
-  "athena-d2": { label: "Athena-D2", account: true, deep: true, direct: false, sourceLimit: 100, smart: true },
-  "athena-d2-d": { label: "Athena-D2-D", account: true, deep: true, direct: true, sourceLimit: 120, smart: true },
+  "athena-c1": { label: "Athena-C1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
+  "athena-c1d": { label: "Athena-C1D", account: false, deep: true, direct: true, sourceLimit: 30, smart: false },
+  "athena-c2": { label: "Athena-C2", account: false, deep: false, direct: false, sourceLimit: 60, smart: true },
+  "athena-c2d": { label: "Athena-C2D", account: false, deep: true, direct: true, sourceLimit: 120, smart: true },
 };
 
 const ATHENA_IMAGE_MODELS = {
-  "athena-i1s": { label: "Athena-I1S", account: false, creditCost: 0, model: "flux-klein", quality: "balanced", direct: false, smart: false },
+  "athena-i1": { label: "Athena-I1", account: false, creditCost: 0, model: "flux-klein", quality: "balanced", direct: false, smart: false },
   "athena-i1d": { label: "Athena-I1D", account: false, creditCost: 0, model: "flux-klein", quality: "high", direct: true, smart: false },
-  "athena-i2s": { label: "Athena-I2S", account: true, creditCost: 1, model: "flux-2-klein", quality: "balanced", direct: false, smart: true },
+  "athena-i2": { label: "Athena-I2", account: true, creditCost: 1, model: "flux-2-klein", quality: "balanced", direct: false, smart: true },
   "athena-i2d": { label: "Athena-I2D", account: true, creditCost: 2, model: "flux-2-klein", quality: "high", direct: true, smart: true },
 };
 
@@ -90,43 +86,65 @@ function selectedMode() {
 }
 
 function selectedAthenaModel() {
-  const value = modelSelect?.value || localStorage.getItem(LOWFRAME_MODEL_KEY) || "athena-s1";
-  const model = ATHENA_MODELS[value] || ATHENA_MODELS["athena-s1"];
-  if (model.account && !currentUser) return ATHENA_MODELS["athena-s1"];
+  const value = normalizeChatModelKey(modelSelect?.value || localStorage.getItem(LOWFRAME_MODEL_KEY) || "athena-c1");
+  const model = ATHENA_MODELS[value] || ATHENA_MODELS["athena-c1"];
+  if (model.account && !currentUser) return ATHENA_MODELS["athena-c1"];
   return model;
 }
 
 function selectedImageModel() {
-  const value = imageModelSelect?.value || localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY) || "athena-i1s";
-  const model = ATHENA_IMAGE_MODELS[value] || ATHENA_IMAGE_MODELS["athena-i1s"];
-  if (model.account && !currentUser) return ATHENA_IMAGE_MODELS["athena-i1s"];
+  const value = normalizeImageModelKey(imageModelSelect?.value || localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY) || "athena-i1");
+  const model = ATHENA_IMAGE_MODELS[value] || ATHENA_IMAGE_MODELS["athena-i1"];
+  if (model.account && !currentUser) return ATHENA_IMAGE_MODELS["athena-i1"];
   return model;
+}
+
+function normalizeChatModelKey(value) {
+  return ({
+    "athena-s1": "athena-c1",
+    "athena-s1-d": "athena-c1d",
+    "athena-d1": "athena-c1d",
+    "athena-d1-d": "athena-c1d",
+    "athena-s2": "athena-c2",
+    "athena-s2-d": "athena-c2d",
+    "athena-d2": "athena-c2d",
+    "athena-d2-d": "athena-c2d",
+  })[value] || value;
+}
+
+function normalizeImageModelKey(value) {
+  return ({
+    "athena-i1s": "athena-i1",
+    "athena-i1-d": "athena-i1d",
+    "athena-i2s": "athena-i2",
+    "athena-i2-d": "athena-i2d",
+  })[value] || value;
 }
 
 function updateModelUi() {
   const mode = selectedMode();
   if (modelSelect) {
-    const saved = localStorage.getItem(LOWFRAME_MODEL_KEY);
+    const saved = normalizeChatModelKey(localStorage.getItem(LOWFRAME_MODEL_KEY));
     if (saved && ATHENA_MODELS[saved]) modelSelect.value = saved;
     for (const option of modelSelect.options) {
       const model = ATHENA_MODELS[option.value];
       option.disabled = Boolean(model?.account && !currentUser);
     }
     if (ATHENA_MODELS[modelSelect.value]?.account && !currentUser) {
-      modelSelect.value = "athena-s1";
+      modelSelect.value = "athena-c1";
     }
     modelSelect.closest(".model-select-label")?.classList.toggle("hidden", mode !== "chat");
   }
 
   if (imageModelSelect) {
-    const saved = localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY);
+    const saved = normalizeImageModelKey(localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY));
     if (saved && ATHENA_IMAGE_MODELS[saved]) imageModelSelect.value = saved;
     for (const option of imageModelSelect.options) {
       const model = ATHENA_IMAGE_MODELS[option.value];
       option.disabled = Boolean(model?.account && !currentUser);
     }
     if (ATHENA_IMAGE_MODELS[imageModelSelect.value]?.account && !currentUser) {
-      imageModelSelect.value = "athena-i1s";
+      imageModelSelect.value = "athena-i1";
     }
     imageModelSelect.closest(".image-model-select-label")?.classList.toggle("hidden", mode !== "image");
   }
@@ -644,7 +662,7 @@ chatForm.addEventListener("submit", async (event) => {
 
     const imageModel = selectedImageModel();
     if (imageModel.account && !currentUser) {
-      addMessage("ai", "Athena-I2 image models require an account. Use Athena-I1S or Athena-I1D, or log in.");
+      addMessage("ai", "Athena-I2 image models require an account. Use Athena-I1 or Athena-I1D, or log in.");
       return;
     }
 
@@ -922,7 +940,7 @@ function showCreditDialog() {
   if (creditDialog?.showModal) {
     creditDialog.showModal();
   } else {
-    addMessage("ai", "You have ran out of credits! Come back tomorrow for more. You can still use I1S and I1D, followed by all of the chat models.");
+    addMessage("ai", "You have ran out of credits! Come back tomorrow for more. You can still use I1 and I1D, followed by all of the chat models.");
   }
 }
 
@@ -1366,14 +1384,7 @@ async function lookupAnswer(message, model = selectedAthenaModel()) {
 }
 
 async function smartSynthesizeIfAvailable(message, response, model) {
-  if (!model.smart || !currentUser || !response?.answer) return response;
-  const cost = model.direct ? 2 : 1;
-  if (smartCredits < cost) {
-    return {
-      answer: `${model.label} needs ${cost} smart credit${cost === 1 ? "" : "s"}, and this account is out. Switch to Athena-S1 or Athena-D1 to keep chatting without smart credits.`,
-      sources: [],
-    };
-  }
+  if (!model.smart || !response?.answer) return response;
 
   try {
     setStatus(`Athena ${model.direct ? "direct" : "smart"} thinking`);

@@ -8,10 +8,24 @@ const sendButton = document.querySelector("#send-button");
 const sourcesDialog = document.querySelector("#sources-dialog");
 const sourcesList = document.querySelector("#sources-list");
 const closeSources = document.querySelector("#close-sources");
+const accountStatus = document.querySelector("#account-status");
+const loginOpen = document.querySelector("#login-open");
+const logoutButton = document.querySelector("#logout-button");
+const authDialog = document.querySelector("#auth-dialog");
+const closeAuth = document.querySelector("#close-auth");
+const loginForm = document.querySelector("#login-form");
+const signupForm = document.querySelector("#signup-form");
+const recoverForm = document.querySelector("#recover-form");
+const githubLogin = document.querySelector("#github-login");
+const recoveryDialog = document.querySelector("#recovery-dialog");
+const recoveryCodesEl = document.querySelector("#recovery-codes");
+const downloadRecovery = document.querySelector("#download-recovery");
 
 const LOWFRAME_MEMORY_KEY = "lowframe_temp_memory_v1";
 const LOWFRAME_MEMORY_LIMIT = 12;
+const LOWFRAME_SESSION_KEY = "lowframe_auth_session_v1";
 const API_TIMEOUT_MS = 7000;
+const AUTH_API_URL = "https://lowframe-auth.897mmo0216.workers.dev/";
 const IMAGE_API_URL = "https://imagegen.897mmo0216.workers.dev/";
 const DEPLOYED_MEDIA_API_URL = "https://lowframe-media.897mmo0216.workers.dev/";
 const LOCAL_MEDIA_API_URL = "http://127.0.0.1:8787/";
@@ -23,6 +37,8 @@ const FETCH_IMAGE_TIMEOUT_MS = 12000;
 
 let uploadedImages = [];
 let tempMemory = loadTempMemory();
+let currentUser = null;
+let pendingRecoveryCodes = [];
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -40,6 +56,122 @@ function setBusy(isBusy, label = "Send") {
 
 function selectedMode() {
   return document.querySelector('input[name="response-mode"]:checked')?.value || "chat";
+}
+
+function sessionToken() {
+  return localStorage.getItem(LOWFRAME_SESSION_KEY) || "";
+}
+
+function setSessionToken(token) {
+  if (token) {
+    localStorage.setItem(LOWFRAME_SESSION_KEY, token);
+  } else {
+    localStorage.removeItem(LOWFRAME_SESSION_KEY);
+  }
+}
+
+function updateAccountUi(user = currentUser) {
+  currentUser = user;
+  if (user) {
+    accountStatus.textContent = user.username || user.email || "Account";
+    loginOpen.classList.add("hidden");
+    logoutButton.classList.remove("hidden");
+  } else {
+    accountStatus.textContent = "Guest";
+    loginOpen.classList.remove("hidden");
+    logoutButton.classList.add("hidden");
+  }
+}
+
+async function authRequest(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const token = sessionToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+
+  const response = await fetch(new URL(path, AUTH_API_URL).toString(), {
+    ...options,
+    headers,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Auth returned ${response.status}`);
+  return data;
+}
+
+async function refreshAccount() {
+  if (!sessionToken()) {
+    updateAccountUi(null);
+    return;
+  }
+
+  try {
+    const data = await authRequest("me");
+    updateAccountUi(data.user);
+  } catch {
+    setSessionToken("");
+    updateAccountUi(null);
+  }
+}
+
+function handleOAuthReturn() {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("session");
+  if (token) {
+    setSessionToken(token);
+    url.searchParams.delete("session");
+    url.searchParams.delete("login");
+    window.history.replaceState({}, "", url.toString());
+  }
+}
+
+function openAuth(tab = "login") {
+  setAuthTab(tab);
+  authDialog.showModal();
+}
+
+function setAuthTab(tab) {
+  for (const button of document.querySelectorAll(".auth-tab")) {
+    button.classList.toggle("active", button.dataset.authTab === tab);
+  }
+  for (const panel of document.querySelectorAll(".auth-panel")) {
+    panel.classList.toggle("active", panel.dataset.authPanel === tab);
+  }
+}
+
+function authMessage(id, text) {
+  const el = document.querySelector(`#${id}`);
+  if (el) el.textContent = text;
+}
+
+function showRecoveryCodes(codes) {
+  pendingRecoveryCodes = codes;
+  recoveryCodesEl.textContent = recoveryCodesText(codes);
+  downloadRecovery.disabled = true;
+  let seconds = 5;
+  downloadRecovery.textContent = `Download and continue (${seconds})`;
+  recoveryDialog.showModal();
+
+  const timer = setInterval(() => {
+    seconds -= 1;
+    if (seconds <= 0) {
+      clearInterval(timer);
+      downloadRecovery.disabled = false;
+      downloadRecovery.textContent = "Download and continue";
+      return;
+    }
+    downloadRecovery.textContent = `Download and continue (${seconds})`;
+  }, 1000);
+}
+
+function recoveryCodesText(codes) {
+  return [
+    "LOWFRAME AI PASSWORD RESET TOKENS",
+    "",
+    "Keep these somewhere safe. Each code can only be used once.",
+    "",
+    ...codes.map((code, index) => `${index + 1}. ${code}`),
+    "",
+  ].join("\n");
 }
 
 function addMessage(role, text, sources = []) {
@@ -3359,3 +3491,102 @@ function clearUploads() {
 }
 
 closeSources.addEventListener("click", () => sourcesDialog.close());
+
+loginOpen.addEventListener("click", () => openAuth("login"));
+closeAuth.addEventListener("click", () => authDialog.close());
+
+for (const button of document.querySelectorAll(".auth-tab")) {
+  button.addEventListener("click", () => setAuthTab(button.dataset.authTab));
+}
+
+githubLogin.addEventListener("click", () => {
+  window.location.href = new URL("login/github", AUTH_API_URL).toString();
+});
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  authMessage("login-message", "Logging in...");
+  try {
+    const data = await authRequest("login", {
+      method: "POST",
+      body: JSON.stringify({
+        email: document.querySelector("#login-email").value,
+        password: document.querySelector("#login-password").value,
+      }),
+    });
+    setSessionToken(data.sessionToken);
+    updateAccountUi(data.user);
+    authDialog.close();
+    authMessage("login-message", "");
+  } catch (error) {
+    authMessage("login-message", error.message);
+  }
+});
+
+signupForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  authMessage("signup-message", "Creating account...");
+  try {
+    const data = await authRequest("signup", {
+      method: "POST",
+      body: JSON.stringify({
+        username: document.querySelector("#signup-username").value,
+        email: document.querySelector("#signup-email").value,
+        password: document.querySelector("#signup-password").value,
+      }),
+    });
+    setSessionToken(data.sessionToken);
+    updateAccountUi(data.user);
+    authDialog.close();
+    authMessage("signup-message", "");
+    showRecoveryCodes(data.recoveryCodes || []);
+  } catch (error) {
+    authMessage("signup-message", error.message);
+  }
+});
+
+recoverForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  authMessage("recover-message", "Resetting password...");
+  try {
+    await authRequest("recover-password", {
+      method: "POST",
+      body: JSON.stringify({
+        email: document.querySelector("#recover-email").value,
+        recoveryCode: document.querySelector("#recover-code").value,
+        newPassword: document.querySelector("#recover-password").value,
+      }),
+    });
+    authMessage("recover-message", "Password reset. You can log in now.");
+    recoverForm.reset();
+    setAuthTab("login");
+  } catch (error) {
+    authMessage("recover-message", error.message);
+  }
+});
+
+logoutButton.addEventListener("click", async () => {
+  try {
+    await authRequest("logout", { method: "POST" });
+  } catch {
+    // Local logout still clears the browser session if the server is unreachable.
+  }
+  setSessionToken("");
+  updateAccountUi(null);
+});
+
+downloadRecovery.addEventListener("click", () => {
+  const blob = new Blob([recoveryCodesText(pendingRecoveryCodes)], { type: "text/plain" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "lowframe-password-reset-tokens.txt";
+  document.body.append(link);
+  link.click();
+  URL.revokeObjectURL(link.href);
+  link.remove();
+  pendingRecoveryCodes = [];
+  recoveryDialog.close();
+});
+
+handleOAuthReturn();
+refreshAccount();

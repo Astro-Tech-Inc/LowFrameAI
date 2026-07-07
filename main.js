@@ -192,6 +192,11 @@ async function staticAnswer(message, images) {
     return { answer: imageMetadataAnswer(images) };
   }
 
+  const greeting = greetingAnswer(message);
+  if (greeting) {
+    return { answer: greeting };
+  }
+
   const math = solveMath(message);
   if (math !== null) {
     return { answer: math };
@@ -206,6 +211,11 @@ async function staticAnswer(message, images) {
     return known;
   }
 
+  const direct = await directApiAnswer(message);
+  if (direct) {
+    return direct;
+  }
+
   return lookupAnswer(message);
 }
 
@@ -217,7 +227,7 @@ function knownStaticAnswer(message) {
     (lower.includes("release") || lower.includes("version") || lower.includes("all"))
   ) {
     return {
-      answer: "The answer: the commonly used LTS JDK releases are JDK 8, JDK 11, JDK 17, JDK 21, and JDK 25. JDK 25 is the latest LTS JDK release, while JDK 26 is a newer non-LTS feature release.",
+      answer: "The commonly used LTS JDK releases are JDK 8, JDK 11, JDK 17, JDK 21, and JDK 25. JDK 25 is the latest LTS JDK release, while JDK 26 is a newer non-LTS feature release.",
       sources: [
         {
           title: "Oracle Java Downloads",
@@ -235,6 +245,10 @@ function knownStaticAnswer(message) {
   return null;
 }
 
+function greetingAnswer(message) {
+  return /^\s*(hi|hello|hey|yo|sup)\s*[!.?]*\s*$/i.test(message) ? "Hi." : "";
+}
+
 function imageMetadataAnswer(images) {
   return [
     "I can inspect the uploaded image metadata in static mode:",
@@ -245,29 +259,147 @@ function imageMetadataAnswer(images) {
   ].join("\n");
 }
 
-async function lookupAnswer(message) {
-  const query = cleanLookupQuery(message);
+async function directApiAnswer(message) {
   const results = await Promise.allSettled([
-    duckDuckGoLookup(query),
-    wikipediaLookup(query),
-    wikidataLookup(query),
+    minecraftServerStatusLookup(message),
+    weatherLookup(message),
+    dictionaryLookup(message),
+    githubLookup(message),
+    packageLookup(message),
+    countryLookup(message),
+    openLibraryLookup(message),
   ]);
   const candidates = results
     .filter((result) => result.status === "fulfilled")
     .flatMap((result) => result.value || [])
     .filter((candidate) => candidate.answer);
 
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => scoreCandidate(message, b) - scoreCandidate(message, a));
+  const best = candidates[0];
+  return {
+    answer: best.answer,
+    sources: uniqueSources(candidates.slice(0, 6).map((candidate) => candidate.source)),
+  };
+}
+
+async function lookupAnswer(message) {
+  const queries = lookupQueries(message);
+  const mainQuery = queries[0];
+  const tasks = [
+    mojangMinecraftLookup(mainQuery),
+    ...queries.flatMap((query) => [
+      minecraftServerStatusLookup(query),
+      duckDuckGoLookup(query),
+      wikipediaLookup(query),
+      wikidataLookup(query),
+      minecraftWikiLookup(query),
+      fandomWikiLookup(query),
+      openLibraryLookup(query),
+      dictionaryLookup(query),
+      githubLookup(query),
+      packageLookup(query),
+      countryLookup(query),
+    ]),
+  ];
+  const results = await Promise.allSettled(tasks);
+  const candidates = results
+    .filter((result) => result.status === "fulfilled")
+    .flatMap((result) => result.value || [])
+    .filter((candidate) => candidate.answer);
+
   if (candidates.length) {
-    candidates.sort((a, b) => scoreCandidate(query, b) - scoreCandidate(query, a));
+    candidates.sort((a, b) => scoreCandidate(mainQuery, b) - scoreCandidate(mainQuery, a));
     const best = candidates[0];
-    const sources = candidates.slice(0, 5).map((candidate) => candidate.source);
+    const sources = uniqueSources(candidates.slice(0, 7).map((candidate) => candidate.source));
     return { answer: best.answer, sources };
   }
 
   return {
-    answer: `I could not find a solid public lookup result for "${query}". Try asking with a more specific name or phrase.`,
+    answer: `I could not find enough source-backed info for "${mainQuery}". Try asking with a more specific name or phrase.`,
     sources: [],
   };
+}
+
+async function minecraftServerStatusLookup(query) {
+  const lower = query.toLowerCase();
+  if (!/(minecraft|mc)\s+server|server\s+(status|ping)|ping\s+.+|status\s+of\s+/.test(lower)) return [];
+  const address = extractServerAddress(query);
+  if (!address) return [];
+
+  const bedrock = /\b(bedrock|pe|pocket)\b/i.test(query);
+  const endpoint = bedrock
+    ? `https://api.mcsrvstat.us/bedrock/3/${encodeURIComponent(address)}`
+    : `https://api.mcsrvstat.us/3/${encodeURIComponent(address)}`;
+  const response = await fetch(endpoint);
+  if (!response.ok) throw new Error("Minecraft server status lookup failed");
+  const data = await response.json();
+  const online = data.online ? "online" : "offline";
+  const players = data.players
+    ? `${data.players.online ?? 0}/${data.players.max ?? "?"} players`
+    : "player count unavailable";
+  const version = data.version || data.protocol?.name || "unknown version";
+  const motd = data.motd?.clean?.filter(Boolean).join(" ").trim();
+  const ipLine = data.ip && data.port ? `${data.ip}:${data.port}` : address;
+  const answer = data.online
+    ? `${address} is online. It is running ${version} at ${ipLine} with ${players}.${motd ? ` MOTD: ${motd}` : ""}`
+    : `${address} appears to be offline or unreachable from the public ping API.`;
+
+  return [{
+    answer,
+    text: `${address} ${online} ${players} ${version} ${motd || ""} Minecraft server status ping`,
+    sourceBoost: 8,
+    source: {
+      title: "mcsrvstat.us Minecraft Server Status API",
+      url: endpoint,
+      snippet: `${address}: ${online}, ${players}, ${version}`,
+    },
+  }];
+}
+
+async function mojangMinecraftLookup(query) {
+  const lower = query.toLowerCase();
+  if (
+    !lower.includes("minecraft") ||
+    /\brd\b|pre-classic|historical|oldest/.test(lower) ||
+    !/\b(last|latest|current|newest|version|launcher|release)\b/.test(lower)
+  ) {
+    return [];
+  }
+
+  const url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Minecraft version manifest lookup failed");
+  const data = await response.json();
+  const latestRelease = data.latest?.release;
+  const latestSnapshot = data.latest?.snapshot;
+  if (!latestRelease && !latestSnapshot) return [];
+
+  const answer = latestSnapshot && latestSnapshot !== latestRelease
+    ? `The latest Minecraft Java Edition release in the launcher manifest is ${latestRelease}. The latest snapshot listed is ${latestSnapshot}.`
+    : `The latest Minecraft Java Edition release in the launcher manifest is ${latestRelease}.`;
+
+  return [{
+    answer,
+    text: `${answer} ${latestRelease || ""} ${latestSnapshot || ""} Minecraft launcher version manifest`,
+    source: {
+      title: "Mojang version manifest",
+      url,
+      snippet: `Latest release: ${latestRelease || "unknown"}. Latest snapshot: ${latestSnapshot || "unknown"}.`,
+    },
+  }];
+}
+
+async function fandomWikiLookup(query) {
+  const info = fandomRequestInfo(query);
+  if (!info) return [];
+  return mediaWikiLookup({
+    query: info.search,
+    api: `https://${info.slug}.fandom.com/api.php`,
+    title: `${info.label} Fandom`,
+    sourceBoost: 12,
+    introOnly: false,
+  });
 }
 
 async function duckDuckGoLookup(query) {
@@ -279,7 +411,7 @@ async function duckDuckGoLookup(query) {
   const text = data.AbstractText || data.Answer || "";
   if (text) {
     candidates.push({
-      answer: `The answer: ${text}`,
+      answer: text,
       text,
       source: { title: data.Heading || "DuckDuckGo", url: data.AbstractURL || url, snippet: text },
     });
@@ -287,13 +419,254 @@ async function duckDuckGoLookup(query) {
   for (const topic of flattenRelatedTopics(data.RelatedTopics || [])) {
     if (topic.Text && topic.FirstURL) {
       candidates.push({
-        answer: `The answer: ${topic.Text}`,
+        answer: topic.Text,
         text: topic.Text,
         source: { title: topic.Text.split(" - ")[0], url: topic.FirstURL, snippet: topic.Text },
       });
     }
   }
   return candidates;
+}
+
+async function openLibraryLookup(query) {
+  const lower = query.toLowerCase();
+  if (!/\b(book|author|novel|isbn|open library)\b/.test(lower)) return [];
+  const search = query
+    .replace(/^(find|search|look up|what is|tell me about)\s+/i, "")
+    .replace(/\b(book|novel|open library)\b/gi, "")
+    .trim();
+  if (search.length < 3) return [];
+
+  const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(search)}&limit=5`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Open Library lookup failed");
+  const data = await response.json();
+  return (data.docs || [])
+    .filter((book) => book.title)
+    .slice(0, 5)
+    .map((book) => {
+      const author = book.author_name?.slice(0, 3).join(", ") || "unknown author";
+      const year = book.first_publish_year || "unknown year";
+      const text = `${book.title} by ${author}, first published ${year}.`;
+      return {
+        answer: text,
+        text: `${text} ${book.subject?.slice(0, 8).join(" ") || ""}`,
+        source: {
+          title: `Open Library: ${book.title}`,
+          url: book.key ? `https://openlibrary.org${book.key}` : url,
+          snippet: text,
+        },
+      };
+    });
+}
+
+async function dictionaryLookup(query) {
+  const word = dictionaryWord(query);
+  if (!word) return [];
+  const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const data = await response.json();
+  const entry = data[0];
+  const meaning = entry?.meanings?.[0];
+  const definition = meaning?.definitions?.[0]?.definition;
+  if (!definition) return [];
+  const part = meaning.partOfSpeech ? ` (${meaning.partOfSpeech})` : "";
+  const answer = `${entry.word}${part}: ${definition}`;
+  return [{
+    answer,
+    text: `${entry.word} ${meaning.partOfSpeech || ""} ${definition}`,
+    source: {
+      title: "Free Dictionary API",
+      url,
+      snippet: answer,
+    },
+  }];
+}
+
+async function githubLookup(query) {
+  const target = githubTarget(query);
+  if (!target) return [];
+
+  if (target.repo) {
+    const url = `https://api.github.com/repos/${target.repo}`;
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    const repo = await response.json();
+    const answer = `${repo.full_name} is a GitHub repository${repo.description ? `: ${repo.description}` : "."} It has ${repo.stargazers_count ?? 0} stars, ${repo.forks_count ?? 0} forks, and its default branch is ${repo.default_branch || "unknown"}.`;
+    return [{
+      answer,
+      text: `${repo.full_name} ${repo.description || ""} ${repo.language || ""} github repository`,
+      sourceBoost: 4,
+      source: {
+        title: `GitHub: ${repo.full_name}`,
+        url: repo.html_url || url,
+        snippet: answer,
+      },
+    }];
+  }
+
+  const url = `https://api.github.com/users/${target.user}`;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const user = await response.json();
+  const answer = `${user.login} is a GitHub user${user.name ? ` named ${user.name}` : ""}. Public repos: ${user.public_repos ?? 0}. Followers: ${user.followers ?? 0}.${user.bio ? ` Bio: ${user.bio}` : ""}`;
+  return [{
+    answer,
+    text: `${user.login} ${user.name || ""} ${user.bio || ""} github user`,
+    sourceBoost: 4,
+    source: {
+      title: `GitHub: ${user.login}`,
+      url: user.html_url || url,
+      snippet: answer,
+    },
+  }];
+}
+
+async function packageLookup(query) {
+  const request = packageRequest(query);
+  if (!request) return [];
+  return request.kind === "npm" ? npmLookup(request.name) : pypiLookup(request.name);
+}
+
+async function npmLookup(name) {
+  const url = `https://registry.npmjs.org/${encodeURIComponent(name)}`;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const data = await response.json();
+  const latest = data["dist-tags"]?.latest || "unknown";
+  const answer = `${name} latest npm version is ${latest}.${data.description ? ` ${data.description}` : ""}`;
+  return [{
+    answer,
+    text: `${name} npm package ${latest} ${data.description || ""}`,
+    source: {
+      title: `npm: ${name}`,
+      url: `https://www.npmjs.com/package/${encodeURIComponent(name)}`,
+      snippet: answer,
+    },
+  }];
+}
+
+async function pypiLookup(name) {
+  const url = `https://pypi.org/pypi/${encodeURIComponent(name)}/json`;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const data = await response.json();
+  const info = data.info || {};
+  const answer = `${name} latest PyPI version is ${info.version || "unknown"}.${info.summary ? ` ${info.summary}` : ""}`;
+  return [{
+    answer,
+    text: `${name} python pypi package ${info.version || ""} ${info.summary || ""}`,
+    source: {
+      title: `PyPI: ${name}`,
+      url: info.package_url || `https://pypi.org/project/${encodeURIComponent(name)}/`,
+      snippet: answer,
+    },
+  }];
+}
+
+async function countryLookup(query) {
+  const name = countryName(query);
+  if (!name) return [];
+  const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(name)}&language=en&format=json&origin=*&limit=5`;
+  const searchResponse = await fetch(searchUrl);
+  if (!searchResponse.ok) return [];
+  const searchData = await searchResponse.json();
+  const item = (searchData.search || []).find((entry) => /country|sovereign|nation|state/i.test(entry.description || "")) || searchData.search?.[0];
+  if (!item?.id) return [];
+
+  const entityUrl = `https://www.wikidata.org/wiki/Special:EntityData/${item.id}.json`;
+  const entityResponse = await fetch(entityUrl);
+  if (!entityResponse.ok) return [];
+  const entityData = await entityResponse.json();
+  const entity = entityData.entities?.[item.id];
+  if (!entity) return [];
+
+  const claims = entity.claims || {};
+  const linkedIds = [
+    ...wikidataItemIds(claims.P36).slice(0, 1),
+    ...wikidataItemIds(claims.P38).slice(0, 2),
+    ...wikidataItemIds(claims.P37).slice(0, 4),
+  ];
+  const labels = await wikidataLabels(linkedIds);
+  const capital = labels[wikidataItemIds(claims.P36)[0]] || "unknown";
+  const currencies = wikidataItemIds(claims.P38).slice(0, 2).map((id) => labels[id]).filter(Boolean).join(", ") || "unknown";
+  const languages = wikidataItemIds(claims.P37).slice(0, 4).map((id) => labels[id]).filter(Boolean).join(", ") || "unknown";
+  const population = wikidataQuantity(claims.P1082);
+  const label = entity.labels?.en?.value || item.label || name;
+  const description = entity.descriptions?.en?.value || item.description || "country";
+  const answer = `${label} is ${description}. Capital: ${capital}. Population: ${population ? Number(population).toLocaleString() : "unknown"}. Currency: ${currencies}. Official language: ${languages}.`;
+  return [{
+    answer,
+    text: `${label} ${description} ${capital} ${population || ""} ${currencies} ${languages}`,
+    source: {
+      title: `Wikidata: ${label}`,
+      url: entity.concepturi || `https://www.wikidata.org/wiki/${item.id}`,
+      snippet: answer,
+    },
+  }];
+}
+
+function wikidataItemIds(claims = []) {
+  return rankedClaims(claims)
+    .map((claim) => claim.mainsnak?.datavalue?.value?.["numeric-id"])
+    .filter(Boolean)
+    .map((id) => `Q${id}`);
+}
+
+function wikidataQuantity(claims = []) {
+  return rankedClaims(claims)
+    .map((claim) => claim.mainsnak?.datavalue?.value?.amount)
+    .filter(Boolean)
+    .map((amount) => Number(amount))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0] || null;
+}
+
+function rankedClaims(claims = []) {
+  const preferred = claims.filter((claim) => claim.rank === "preferred");
+  const normal = claims.filter((claim) => claim.rank !== "deprecated");
+  return preferred.length ? preferred : normal;
+}
+
+async function wikidataLabels(ids) {
+  const uniqueIds = uniqueStrings(ids);
+  if (!uniqueIds.length) return {};
+  const url = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(uniqueIds.join("|"))}&props=labels&languages=en&format=json&origin=*`;
+  const response = await fetch(url);
+  if (!response.ok) return {};
+  const data = await response.json();
+  return Object.fromEntries(Object.entries(data.entities || {}).map(([id, entity]) => [id, entity.labels?.en?.value]).filter(([, label]) => label));
+}
+
+async function weatherLookup(query) {
+  const location = weatherLocation(query);
+  if (!location) return [];
+  const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=3&language=en&format=json`;
+  const geoResponse = await fetch(geoUrl);
+  if (!geoResponse.ok) return [];
+  const geo = await geoResponse.json();
+  const place = geo.results?.[0];
+  if (!place) return [];
+
+  const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto`;
+  const weatherResponse = await fetch(weatherUrl);
+  if (!weatherResponse.ok) return [];
+  const data = await weatherResponse.json();
+  const current = data.current || {};
+  const daily = data.daily || {};
+  const label = [place.name, place.admin1, place.country].filter(Boolean).join(", ");
+  const answer = `${label} is ${Math.round(current.temperature_2m)}F now with ${current.relative_humidity_2m}% humidity, ${current.wind_speed_10m} mph wind, and ${current.precipitation} in precipitation. Today: high ${Math.round(daily.temperature_2m_max?.[0])}F, low ${Math.round(daily.temperature_2m_min?.[0])}F, precipitation chance ${daily.precipitation_probability_max?.[0] ?? "unknown"}%.`;
+  return [{
+    answer,
+    text: `${label} weather forecast temperature humidity wind precipitation`,
+    sourceBoost: 5,
+    source: {
+      title: "Open-Meteo Weather API",
+      url: weatherUrl,
+      snippet: answer,
+    },
+  }];
 }
 
 async function wikipediaLookup(query) {
@@ -314,7 +687,7 @@ async function wikipediaLookup(query) {
   return summaries
     .filter((result) => result.status === "fulfilled" && result.value.extract)
     .map((result) => ({
-      answer: `The answer: ${result.value.extract}`,
+      answer: result.value.extract,
       text: `${result.value.title} ${result.value.extract}`,
       source: {
         title: result.value.title,
@@ -334,12 +707,73 @@ async function wikidataLookup(query) {
     .map((item) => {
       const text = `${item.label}: ${item.description}`;
       return {
-        answer: `The answer: ${text}.`,
+        answer: `${text}.`,
         text,
         source: {
           title: item.label,
           url: item.concepturi || `https://www.wikidata.org/wiki/${item.id}`,
           snippet: item.description,
+        },
+      };
+    });
+}
+
+async function minecraftWikiLookup(query) {
+  if (query.toLowerCase().includes("fandom")) return [];
+  if (!query.toLowerCase().includes("minecraft") && !/\brd-\d+\b|\brd\b/i.test(query)) return [];
+  return mediaWikiLookup({
+    query,
+    api: "https://minecraft.wiki/api.php",
+    title: "Minecraft Wiki",
+    sourceBoost: 2,
+  });
+}
+
+async function mediaWikiLookup({ query, api, title, sourceBoost = 0, introOnly = true }) {
+  const searchParams = new URLSearchParams({
+    action: "query",
+    list: "search",
+    srsearch: query,
+    srlimit: "7",
+    format: "json",
+    origin: "*",
+  });
+  const searchResponse = await fetch(`${api}?${searchParams}`);
+  if (!searchResponse.ok) throw new Error(`${title} search failed`);
+  const searchData = await searchResponse.json();
+  const hits = searchData.query?.search || [];
+  const titles = hits.map((hit) => hit.title).filter(Boolean);
+  if (!titles.length) return [];
+
+  const pageParams = new URLSearchParams({
+    action: "query",
+    prop: "extracts|info",
+    explaintext: "1",
+    exchars: "900",
+    inprop: "url",
+    titles: titles.join("|"),
+    format: "json",
+    origin: "*",
+  });
+  if (introOnly) pageParams.set("exintro", "1");
+  const pageResponse = await fetch(`${api}?${pageParams}`);
+  if (!pageResponse.ok) throw new Error(`${title} page lookup failed`);
+  const pageData = await pageResponse.json();
+  const pages = Object.values(pageData.query?.pages || {});
+
+  return pages
+    .filter((page) => page.title && page.extract)
+    .map((page) => {
+      const hit = hits.find((item) => item.title === page.title);
+      const snippet = cleanSnippet(hit?.snippet || page.extract);
+      return {
+        answer: page.extract,
+        text: `${page.title} ${page.extract} ${snippet}`,
+        sourceBoost,
+        source: {
+          title: `${title}: ${page.title}`,
+          url: page.fullurl || page.canonicalurl || `${api}?title=${encodeURIComponent(page.title)}`,
+          snippet,
         },
       };
     });
@@ -352,10 +786,61 @@ function flattenRelatedTopics(topics) {
 function scoreCandidate(query, candidate) {
   const queryWords = keywords(query);
   const textWords = new Set(keywords(candidate.text || candidate.answer));
+  const candidateText = (candidate.text || candidate.answer || "").toLowerCase();
   const overlap = queryWords.filter((word) => textWords.has(word)).length;
-  const sourceBonus = candidate.source.url.includes("wikipedia.org") ? 1 : 0;
+  const sourceBonus = sourceScore(query, candidate) + (candidate.sourceBoost || 0);
   const lengthBonus = Math.min((candidate.text || "").length / 400, 1);
-  return overlap * 3 + sourceBonus + lengthBonus;
+  const exactPhraseBonus = importantPhrases(query)
+    .filter((phrase) => candidateText.includes(phrase))
+    .length * 4;
+  return overlap * 3 + exactPhraseBonus + intentScore(query, candidateText) + sourceBonus + lengthBonus;
+}
+
+function intentScore(query, candidateText) {
+  const lower = query.toLowerCase();
+  let score = 0;
+  if (/\blast\b/.test(lower) && /\brd\b/.test(lower) && candidateText.includes("last archived version of pre-classic")) {
+    score += 20;
+  }
+  if (/\blast\b/.test(lower) && !/\boldest\b/.test(lower) && candidateText.includes("oldest version")) {
+    score -= 12;
+  }
+  return score;
+}
+
+function sourceScore(query, candidate) {
+  const url = candidate.source?.url || "";
+  const lower = query.toLowerCase();
+  const currentVersionIntent = lower.includes("minecraft") &&
+    /\b(last|latest|current|newest)\b/.test(lower) &&
+    !/\brd\b|pre-classic|historical|oldest/.test(lower);
+  let score = 0;
+  if (url.includes("wikipedia.org")) score += 1;
+  if (url.includes("minecraft.wiki") && (lower.includes("minecraft") || /\brd\b/.test(lower))) score += 4;
+  if (url.includes("mojang.com") && lower.includes("minecraft")) score += 5;
+  if (url.includes("mojang.com") && currentVersionIntent) score += 10;
+  if (url.includes("mcsrvstat.us") && /\b(server|ping|status)\b/.test(lower)) score += 12;
+  if (url.includes("fandom.com") && lower.includes("fandom")) score += 20;
+  if (url.includes("open-meteo.com") && /\b(weather|forecast|temperature|temp)\b/.test(lower)) score += 12;
+  if (url.includes("dictionaryapi.dev") && /\b(define|definition|meaning)\b/.test(lower)) score += 10;
+  if (url.includes("github.com") && lower.includes("github")) score += 10;
+  if (url.includes("npmjs.com") && /\b(npm|node package)\b/.test(lower)) score += 10;
+  if (url.includes("pypi.org") && /\b(pypi|python package|pip package)\b/.test(lower)) score += 10;
+  if (url.includes("openlibrary.org") && /\b(book|author|novel|isbn)\b/.test(lower)) score += 8;
+  return score;
+}
+
+function importantPhrases(query) {
+  const lower = query.toLowerCase();
+  const oldVersionIntent = /\brd\b|pre-classic|historical|oldest/.test(lower);
+  const phrases = [];
+  if (lower.includes("minecraft") && lower.includes("launcher")) phrases.push("minecraft launcher");
+  if (oldVersionIntent && lower.includes("available")) phrases.push("available in the minecraft launcher");
+  if (/\brd\b/.test(lower)) {
+    phrases.push("rd-");
+    if (lower.includes("last")) phrases.push("last archived version of pre-classic");
+  }
+  return phrases;
 }
 
 function keywords(text) {
@@ -363,10 +848,164 @@ function keywords(text) {
   return String(text).toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => !stop.has(word)) || [];
 }
 
+function lookupQueries(message) {
+  const clean = cleanLookupQuery(message);
+  const lowered = clean.toLowerCase();
+  const queries = [
+    clean,
+    clean
+      .replace(/\b(go|look|check)\s+(on|at)\s+.+?\s+for\s+help\.?/i, "")
+      .replace(/\bofficial\b/gi, "")
+      .trim(),
+  ];
+
+  if (lowered.includes("minecraft")) {
+    queries.push(clean.replace(/\b(on|from)\s+the\s+minecraft\s+wiki\b/gi, "").trim());
+    queries.push(`${clean} Minecraft Wiki`);
+  }
+
+  if (lowered.includes("minecraft") && lowered.includes("launcher")) {
+    queries.push("Minecraft Launcher version_manifest latest release");
+  }
+
+  if (lowered.includes("minecraft") && lowered.includes("launcher") && /\brd\b/.test(lowered)) {
+    queries.push("\"available in the Minecraft Launcher\" rd");
+    queries.push("pre-Classic versions available in the Minecraft Launcher rd");
+    if (lowered.includes("last")) {
+      queries.push("last rd pre-Classic launcher");
+      queries.push("last archived version pre-Classic launcher rd");
+    }
+  }
+
+  return uniqueStrings(queries.filter(Boolean)).slice(0, 8);
+}
+
 function cleanLookupQuery(message) {
   return message
     .replace(/^(look up|search for|search|what is|what are|who is|who are|tell me about)\s+/i, "")
     .trim() || message.trim();
+}
+
+function cleanSnippet(snippet) {
+  const template = document.createElement("template");
+  template.innerHTML = snippet;
+  return (template.content.textContent || snippet).replace(/\s+/g, " ").trim();
+}
+
+function uniqueStrings(values) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function uniqueSources(sources) {
+  const seen = new Set();
+  return sources.filter((source) => {
+    const key = source.url || source.title;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractServerAddress(query) {
+  const cleaned = query
+    .replace(/^https?:\/\//i, "")
+    .replace(/\b(minecraft|mc|java|bedrock|server|status|ping|check|is|online|offline|for|of|the|a|an)\b/gi, " ");
+  const address = cleaned.match(/\b((?:[a-z0-9-]+\.)+[a-z]{2,}|(?:\d{1,3}\.){3}\d{1,3})(?::\d{2,5})?\b/i)?.[0];
+  return address || "";
+}
+
+function fandomRequestInfo(query) {
+  const lower = query.toLowerCase();
+  if (!lower.includes("fandom")) return null;
+
+  const urlSlug = lower.match(/\b([a-z0-9-]+)\.fandom\.com\b/)?.[1];
+  const namedSlug =
+    lower.match(/\b(?:on|from|in|search|check)\s+([a-z0-9-]+)\s+(?:fandom|fandom wiki)\b/)?.[1] ||
+    lower.match(/\b([a-z0-9-]+)\s+(?:fandom|fandom wiki)\b/)?.[1];
+  const known = [
+    ["minecraft", "minecraft"],
+    ["terraria", "terraria"],
+    ["roblox", "roblox"],
+    ["fallout", "fallout"],
+    ["elder scrolls", "elderscrolls"],
+    ["zelda", "zelda"],
+    ["star wars", "starwars"],
+    ["marvel", "marvel"],
+    ["dc", "dc"],
+    ["pokemon", "pokemon"],
+  ].find(([name]) => lower.includes(name))?.[1];
+  const slug = urlSlug || known || namedSlug;
+  if (!slug || ["fandom", "wiki", "about"].includes(slug)) return null;
+
+  const search = query
+    .replace(/https?:\/\/[a-z0-9-]+\.fandom\.com\/?\S*/gi, "")
+    .replace(/\b(?:on|from|in|search|check)\s+[a-z0-9-]+\s+(?:fandom|fandom wiki)\b/gi, "")
+    .replace(/\b[a-z0-9-]+\s+(?:fandom|fandom wiki)\b/gi, "")
+    .replace(/\bfandom\b/gi, "")
+    .replace(/^(look up|search|find|what is|who is|tell me about)\s+/i, "")
+    .trim();
+
+  return {
+    slug,
+    label: slug.replaceAll("-", " "),
+    search: search || query.replace(/\bfandom\b/gi, "").trim(),
+  };
+}
+
+function dictionaryWord(query) {
+  const match =
+    query.match(/\b(?:define|definition of|meaning of|what does)\s+["']?([a-z-]{2,})["']?/i) ||
+    query.match(/\b([a-z-]{2,})\s+(?:definition|meaning)\b/i);
+  return match?.[1]?.toLowerCase() || "";
+}
+
+function githubTarget(query) {
+  const lower = query.toLowerCase();
+  if (!lower.includes("github") && !/github\.com\//i.test(query)) return null;
+  const repo =
+    query.match(/github\.com\/([a-z0-9_.-]+\/[a-z0-9_.-]+)/i)?.[1] ||
+    query.match(/\b([a-z0-9_.-]+\/[a-z0-9_.-]+)\b/i)?.[1];
+  if (repo) return { repo: repo.replace(/\.git$/i, "") };
+  const user =
+    query.match(/github\.com\/([a-z0-9_.-]+)/i)?.[1] ||
+    query.match(/\bgithub\s+(?:user|profile)\s+([a-z0-9_.-]+)\b/i)?.[1];
+  return user ? { user } : null;
+}
+
+function packageRequest(query) {
+  const lower = query.toLowerCase();
+  const npm =
+    query.match(/\b(?:npm|node package)\s+(?:package\s+)?(@?[a-z0-9_.~/-]+)\b/i)?.[1] ||
+    query.match(/\b([@a-z0-9_.~/-]+)\s+(?:npm package|latest npm version)\b/i)?.[1];
+  if (npm && lower.includes("npm")) return { kind: "npm", name: npm };
+
+  const pypi =
+    query.match(/\b(?:pypi|python package|pip package)\s+(?:package\s+)?([a-z0-9_.-]+)\b/i)?.[1] ||
+    query.match(/\b([a-z0-9_.-]+)\s+(?:pypi|python package|pip package|latest pip version)\b/i)?.[1];
+  if (pypi && /\b(pypi|python package|pip package|pip)\b/.test(lower)) return { kind: "pypi", name: pypi };
+
+  return null;
+}
+
+function countryName(query) {
+  const match =
+    query.match(/\b(?:capital|population|currency|languages?)\s+of\s+([a-z][a-z\s-]{2,})(?:\s+country)?\??$/i) ||
+    query.match(/\b([a-z][a-z\s-]{2,})\s+(?:country|capital|population|currency|languages?)\??$/i) ||
+    query.match(/\b(?:country|capital|population|currency|languages?)\s+(?:of|in|for)?\s*([a-z][a-z\s-]{2,})\??$/i) ||
+    query.match(/\b(?:tell me about|what is)\s+([a-z][a-z\s-]{2,})\s+(?:country|like)\??$/i);
+  if (!match) return "";
+  return match[1].replace(/\b(the|country|capital|population|currency|language|languages|of|in|for)\b/gi, "").trim();
+}
+
+function weatherLocation(query) {
+  const match =
+    query.match(/\b(?:weather|forecast|temperature|temp)\s+(?:in|for|at)?\s*([a-z][a-z\s,.-]{2,})\??$/i) ||
+    query.match(/\b(?:what is|what's)\s+the\s+(?:weather|forecast|temperature|temp)\s+(?:in|for|at)\s+([a-z][a-z\s,.-]{2,})\??$/i);
+  if (!match) return "";
+  return match[1]
+    .replace(/\b(today|tomorrow|right now|now|currently)\b/gi, "")
+    .replace(/[?.!]+$/g, "")
+    .trim();
 }
 
 function solveMath(message) {

@@ -10,10 +10,18 @@
     <main class="app-shell">
       <header class="account-bar" aria-label="Account">
         <div class="account-status" id="account-status">Guest</div>
+        <div class="credit-status" id="credit-status"></div>
         <button class="ghost-button" id="login-open" type="button">Login</button>
         <button class="ghost-button" id="signup-open" type="button">Sign up</button>
         <button class="ghost-button hidden" id="logout-button" type="button">Logout</button>
       </header>
+      <aside class="history-panel hidden" id="history-panel" aria-label="Saved chats">
+        <div class="history-header">
+          <h2>Chats</h2>
+          <button class="ghost-button" id="new-chat" type="button">New</button>
+        </div>
+        <div class="history-list" id="history-list"></div>
+      </aside>
       <section class="chat-panel" aria-label="LowFrame AI chat">
         <header class="topbar">
           <div>
@@ -47,6 +55,19 @@
                 <span>Fetch</span>
               </label>
             </div>
+            <label class="model-select-label">
+              Model
+              <select id="model-select">
+                <option value="athena-s1">Athena-S1</option>
+                <option value="athena-s1-d">Athena-S1-D</option>
+                <option value="athena-d1">Athena-D1</option>
+                <option value="athena-d1-d">Athena-D1-D</option>
+                <option value="athena-s2">Athena-S2</option>
+                <option value="athena-s2-d">Athena-S2-D</option>
+                <option value="athena-d2">Athena-D2</option>
+                <option value="athena-d2-d">Athena-D2-D</option>
+              </select>
+            </label>
             <div class="upload-preview" id="upload-preview"></div>
           </div>
           <textarea id="message-input" rows="3" placeholder="Ask a question!"></textarea>

@@ -2,10 +2,6 @@ const messages = document.querySelector("#messages");
 const chatForm = document.querySelector("#chat-form");
 const messageInput = document.querySelector("#message-input");
 const statusEl = document.querySelector("#status");
-const imagePrompt = document.querySelector("#image-prompt");
-const imageButton = document.querySelector("#image-button");
-const pollinationsKey = document.querySelector("#pollinations-key");
-const imageOutput = document.querySelector("#image-output");
 const imageUpload = document.querySelector("#image-upload");
 const uploadPreview = document.querySelector("#upload-preview");
 const sourcesDialog = document.querySelector("#sources-dialog");
@@ -45,28 +41,6 @@ function addMessage(role, text, sources = []) {
   }
 
   addCopyButtons(bubble);
-  article.append(speaker, bubble);
-  messages.append(article);
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function addImageMessage(prompt, image) {
-  const article = document.createElement("article");
-  article.className = "message ai";
-
-  const speaker = document.createElement("div");
-  speaker.className = "speaker";
-  speaker.textContent = "LowFrame AI";
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble image-bubble";
-  const caption = document.createElement("div");
-  caption.className = "image-caption";
-  caption.textContent = `Generated image: ${prompt}`;
-  image.classList.add("generated-image");
-  image.alt = prompt;
-  bubble.append(caption, image);
-
   article.append(speaker, bubble);
   messages.append(article);
   messages.scrollTop = messages.scrollHeight;
@@ -176,12 +150,6 @@ chatForm.addEventListener("submit", async (event) => {
   messageInput.value = "";
   addMessage("user", message || "Uploaded image");
 
-  const generationPrompt = imagePromptFromChat(message);
-  if (generationPrompt && !uploadedImages.length) {
-    await generateImage(generationPrompt);
-    return;
-  }
-
   setStatus("Thinking");
   try {
     const response = await staticAnswer(message, uploadedImages);
@@ -219,10 +187,6 @@ imageUpload.addEventListener("change", async () => {
   }
 });
 
-imageButton.addEventListener("click", async () => {
-  await generateImage(imagePrompt.value.trim());
-});
-
 async function staticAnswer(message, images) {
   if (images.length) {
     return { answer: imageMetadataAnswer(images) };
@@ -237,7 +201,38 @@ async function staticAnswer(message, images) {
     return { answer: codeAnswer(message) };
   }
 
+  const known = knownStaticAnswer(message);
+  if (known) {
+    return known;
+  }
+
   return lookupAnswer(message);
+}
+
+function knownStaticAnswer(message) {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("jdk") &&
+    lower.includes("lts") &&
+    (lower.includes("release") || lower.includes("version") || lower.includes("all"))
+  ) {
+    return {
+      answer: "The answer: the commonly used LTS JDK releases are JDK 8, JDK 11, JDK 17, JDK 21, and JDK 25. JDK 25 is the latest LTS JDK release, while JDK 26 is a newer non-LTS feature release.",
+      sources: [
+        {
+          title: "Oracle Java Downloads",
+          url: "https://www.oracle.com/java/technologies/downloads/",
+          snippet: "Oracle lists JDK 25 as the latest Long-Term Support release and JDK 21 as the previous LTS release.",
+        },
+        {
+          title: "BellSoft Liberica JDK downloads",
+          url: "https://bell-sw.com/pages/downloads/",
+          snippet: "BellSoft lists JDK 8, 11, 17, 21, and 25 as LTS versions.",
+        },
+      ],
+    };
+  }
+  return null;
 }
 
 function imageMetadataAnswer(images) {
@@ -252,11 +247,22 @@ function imageMetadataAnswer(images) {
 
 async function lookupAnswer(message) {
   const query = cleanLookupQuery(message);
-  const duck = await duckDuckGoLookup(query).catch(() => null);
-  if (duck?.answer) return duck;
+  const results = await Promise.allSettled([
+    duckDuckGoLookup(query),
+    wikipediaLookup(query),
+    wikidataLookup(query),
+  ]);
+  const candidates = results
+    .filter((result) => result.status === "fulfilled")
+    .flatMap((result) => result.value || [])
+    .filter((candidate) => candidate.answer);
 
-  const wiki = await wikipediaLookup(query).catch(() => null);
-  if (wiki?.answer) return wiki;
+  if (candidates.length) {
+    candidates.sort((a, b) => scoreCandidate(query, b) - scoreCandidate(query, a));
+    const best = candidates[0];
+    const sources = candidates.slice(0, 5).map((candidate) => candidate.source);
+    return { answer: best.answer, sources };
+  }
 
   return {
     answer: `I could not find a solid public lookup result for "${query}". Try asking with a more specific name or phrase.`,
@@ -269,31 +275,92 @@ async function duckDuckGoLookup(query) {
   const response = await fetch(url);
   if (!response.ok) throw new Error("DuckDuckGo lookup failed");
   const data = await response.json();
+  const candidates = [];
   const text = data.AbstractText || data.Answer || "";
-  if (!text) return null;
-  return {
-    answer: `The answer: ${text}`,
-    sources: [{ title: data.Heading || "DuckDuckGo", url: data.AbstractURL || url, snippet: text }],
-  };
+  if (text) {
+    candidates.push({
+      answer: `The answer: ${text}`,
+      text,
+      source: { title: data.Heading || "DuckDuckGo", url: data.AbstractURL || url, snippet: text },
+    });
+  }
+  for (const topic of flattenRelatedTopics(data.RelatedTopics || [])) {
+    if (topic.Text && topic.FirstURL) {
+      candidates.push({
+        answer: `The answer: ${topic.Text}`,
+        text: topic.Text,
+        source: { title: topic.Text.split(" - ")[0], url: topic.FirstURL, snippet: topic.Text },
+      });
+    }
+  }
+  return candidates;
 }
 
 async function wikipediaLookup(query) {
-  const searchUrl = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=1&namespace=0&format=json&origin=*`;
+  const searchUrl = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=5&namespace=0&format=json&origin=*`;
   const searchResponse = await fetch(searchUrl);
   if (!searchResponse.ok) throw new Error("Wikipedia search failed");
   const search = await searchResponse.json();
-  const title = search[1]?.[0];
-  if (!title) return null;
+  const titles = search[1] || [];
+  if (!titles.length) return [];
 
-  const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
-  const summaryResponse = await fetch(summaryUrl);
-  if (!summaryResponse.ok) throw new Error("Wikipedia summary failed");
-  const summary = await summaryResponse.json();
-  if (!summary.extract) return null;
-  return {
-    answer: `The answer: ${summary.extract}`,
-    sources: [{ title: summary.title, url: summary.content_urls?.desktop?.page || summaryUrl, snippet: summary.extract }],
-  };
+  const summaries = await Promise.allSettled(titles.map(async (title) => {
+    const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    const summaryResponse = await fetch(summaryUrl);
+    if (!summaryResponse.ok) throw new Error("Wikipedia summary failed");
+    return summaryResponse.json();
+  }));
+
+  return summaries
+    .filter((result) => result.status === "fulfilled" && result.value.extract)
+    .map((result) => ({
+      answer: `The answer: ${result.value.extract}`,
+      text: `${result.value.title} ${result.value.extract}`,
+      source: {
+        title: result.value.title,
+        url: result.value.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(result.value.title)}`,
+        snippet: result.value.extract,
+      },
+    }));
+}
+
+async function wikidataLookup(query) {
+  const url = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(query)}&language=en&format=json&origin=*&limit=5`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Wikidata lookup failed");
+  const data = await response.json();
+  return (data.search || [])
+    .filter((item) => item.label && item.description)
+    .map((item) => {
+      const text = `${item.label}: ${item.description}`;
+      return {
+        answer: `The answer: ${text}.`,
+        text,
+        source: {
+          title: item.label,
+          url: item.concepturi || `https://www.wikidata.org/wiki/${item.id}`,
+          snippet: item.description,
+        },
+      };
+    });
+}
+
+function flattenRelatedTopics(topics) {
+  return topics.flatMap((topic) => topic.Topics ? flattenRelatedTopics(topic.Topics) : [topic]);
+}
+
+function scoreCandidate(query, candidate) {
+  const queryWords = keywords(query);
+  const textWords = new Set(keywords(candidate.text || candidate.answer));
+  const overlap = queryWords.filter((word) => textWords.has(word)).length;
+  const sourceBonus = candidate.source.url.includes("wikipedia.org") ? 1 : 0;
+  const lengthBonus = Math.min((candidate.text || "").length / 400, 1);
+  return overlap * 3 + sourceBonus + lengthBonus;
+}
+
+function keywords(text) {
+  const stop = new Set(["the", "and", "for", "you", "that", "this", "with", "what", "when", "where", "who", "are", "is", "of", "a", "an", "to", "in"]);
+  return String(text).toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => !stop.has(word)) || [];
 }
 
 function cleanLookupQuery(message) {
@@ -404,66 +471,6 @@ function pythonCalculator() {
 
 function pythonTodo() {
   return `tasks = []\n\nwhile True:\n    print("\\n1. Show tasks\\n2. Add task\\n3. Quit")\n    choice = input("> ")\n    if choice == "1":\n        for i, task in enumerate(tasks, 1):\n            print(f"{i}. {task}")\n    elif choice == "2":\n        tasks.append(input("Task: "))\n    elif choice == "3":\n        break`;
-}
-
-function imagePromptFromChat(message) {
-  const patterns = [/^generate an image of\s+/i, /^generate image of\s+/i, /^make an image of\s+/i, /^create an image of\s+/i, /^draw\s+/i, /^image:\s*/i];
-  for (const pattern of patterns) {
-    const prompt = message.replace(pattern, "").trim();
-    if (prompt !== message && prompt) return prompt;
-  }
-  return "";
-}
-
-async function generateImage(prompt) {
-  if (!prompt) {
-    setStatus("Image prompt needed");
-    return;
-  }
-  const key = pollinationsKey.value.trim();
-  if (!key) {
-    addMessage("ai", "Pollinations needs an API key. Paste your key in the Image panel first.");
-    return;
-  }
-
-  setStatus("Generating image");
-  imageButton.disabled = true;
-  imageOutput.innerHTML = '<div class="loading">Generating image with Pollinations...</div>';
-
-  try {
-    const response = await fetch("https://gen.pollinations.ai/v1/images/generations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${key}`,
-      },
-      body: JSON.stringify({ prompt, model: "flux", size: "1024x1024", response_format: "url" }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error?.message || data.error || "Image generation failed");
-    const item = data.data?.[0];
-    const url = item?.url || (item?.b64_json ? `data:image/png;base64,${item.b64_json}` : "");
-    if (!url) throw new Error("Pollinations did not return an image.");
-    const image = await loadGeneratedImage(url);
-    imageOutput.innerHTML = "";
-    imageOutput.append(image.cloneNode(true));
-    addImageMessage(prompt, image);
-    setStatus("Ready");
-  } catch (error) {
-    imageOutput.innerHTML = `<div class="error">Image error: ${escapeHtml(error.message)}</div>`;
-    setStatus("Error");
-  } finally {
-    imageButton.disabled = false;
-  }
-}
-
-function loadGeneratedImage(url) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Image URL could not be loaded"));
-    image.src = url;
-  });
 }
 
 function readImageFile(file) {

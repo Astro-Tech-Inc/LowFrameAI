@@ -95,7 +95,6 @@ function selectedAthenaModel() {
 function selectedImageModel() {
   const value = normalizeImageModelKey(imageModelSelect?.value || localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY) || "athena-i1");
   const model = ATHENA_IMAGE_MODELS[value] || ATHENA_IMAGE_MODELS["athena-i1"];
-  if (model.account && !currentUser) return ATHENA_IMAGE_MODELS["athena-i1"];
   return model;
 }
 
@@ -142,9 +141,6 @@ function updateModelUi() {
     for (const option of imageModelSelect.options) {
       const model = ATHENA_IMAGE_MODELS[option.value];
       option.disabled = Boolean(model?.account && !currentUser);
-    }
-    if (ATHENA_IMAGE_MODELS[imageModelSelect.value]?.account && !currentUser) {
-      imageModelSelect.value = "athena-i1";
     }
     imageModelSelect.closest(".image-model-select-label")?.classList.toggle("hidden", mode !== "image");
   }
@@ -1288,6 +1284,7 @@ async function directApiAnswer(message, model = selectedAthenaModel()) {
     sportsLookup(message),
     minecraftServerStatusLookup(message),
     weatherLookup(message),
+    founderLookup(message),
     mdnLookup(message),
     tvMazeLookup(message),
     jikanLookup(message),
@@ -1342,6 +1339,7 @@ async function lookupAnswer(message, model = selectedAthenaModel()) {
       linuxDriverSourceLookup(query),
       cpuComparisonSourceLookup(query),
       archInstallLookup(query),
+      founderLookup(query),
       extraPublicApiLookup(query),
       minecraftWikiLookup(query),
       fandomWikiLookup(query),
@@ -1886,6 +1884,57 @@ async function wikidataLookup(query) {
         },
       };
     });
+}
+
+async function founderLookup(query) {
+  if (!isFounderQuestion(query)) return [];
+  const subject = founderSubject(query);
+  if (!subject) return [];
+
+  const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(subject)}&language=en&format=json&origin=*&limit=5`;
+  const searchData = await fetchJson(searchUrl);
+  const item = (searchData?.search || []).find((entry) => {
+    const text = `${entry.label || ""} ${entry.description || ""}`.toLowerCase();
+    return normalizeTitle(entry.label || "") === normalizeTitle(subject) ||
+      /\b(company|business|enterprise|organization|manufacturer|corporation)\b/.test(text);
+  }) || searchData?.search?.[0];
+  if (!item?.id) return [];
+
+  const entityUrl = `https://www.wikidata.org/wiki/Special:EntityData/${item.id}.json`;
+  const entityData = await fetchJson(entityUrl);
+  const entity = entityData?.entities?.[item.id];
+  if (!entity) return [];
+
+  const founderIds = wikidataItemIds(entity.claims?.P112).slice(0, 4);
+  if (!founderIds.length) return [];
+  const labels = await wikidataLabels(founderIds);
+  const founders = founderIds.map((id) => labels[id]).filter(Boolean);
+  if (!founders.length) return [];
+
+  const label = entity.labels?.en?.value || item.label || subject;
+  const answer = `${label} was founded by ${joinNatural(founders)}.`;
+  return [{
+    answer,
+    text: `${label} creator created founder founded by ${founders.join(" ")} ${item.description || ""}`,
+    sourceBoost: 24,
+    source: {
+      title: `Wikidata: ${label}`,
+      url: entity.concepturi || `https://www.wikidata.org/wiki/${item.id}`,
+      snippet: answer,
+    },
+  }];
+}
+
+function isFounderQuestion(query) {
+  return /\b(who|what|did|was)\b/i.test(query) &&
+    /\b(founder|founded|creator|created|made|started|established|launched)\b/i.test(query);
+}
+
+function founderSubject(query) {
+  return cleanLookupQuery(query)
+    .replace(/\b(who|what|did|was|were|is|are|the|a|an|of|for|company|creator|created|make|made|founder|founded|started|established|launched)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function stackExchangeLookup(query) {
@@ -2676,6 +2725,10 @@ function intentScore(query, candidateText) {
     if (/\b(amd|advanced micro devices|ryzen)\b/.test(candidateText)) score += 5;
     if (/\b(intel|core i[3579]|xeon)\b/.test(candidateText)) score += 5;
   }
+  if (isFounderQuestion(query)) {
+    if (/\b(founder|founded by|created by|started by)\b/.test(candidateText)) score += 20;
+    if (/\b(investor|spacecraft|dragon|rocket)\b/.test(candidateText) && !/\bfounded by\b/.test(candidateText)) score -= 15;
+  }
   if (/\blast\b/.test(lower) && /\brd\b/.test(lower) && candidateText.includes("last archived version of pre-classic")) {
     score += 20;
   }
@@ -2754,6 +2807,7 @@ function structuredIntentSatisfied(query, best) {
   if (url.includes("archlinux.org") && /\b(arch|archlinux|pacman|install|package|desktop|linux)\b/.test(lower)) return true;
   if (url.includes("system76.com") && /\b(cosmic|desktop|install|linux)\b/.test(lower)) return true;
   if (url.includes("wikidata.org") && scoreCandidate(query, best) >= 8) return true;
+  if (url.includes("wikidata.org") && isFounderQuestion(query) && /\bfounded by\b/i.test(best.answer || best.text || "")) return true;
 
   return false;
 }
@@ -3299,9 +3353,6 @@ function plainFact(text) {
   return text
     .replace(/the art, application, and practice of creating images by recording light/i, "making images by capturing light")
     .replace(/either electronically by means of an image sensor, or chemically by means of a light-sensitive material such as photographic film/i, "using either a digital sensor or light-sensitive film")
-    .replace(/^(.+?) is a /i, "$1 is basically a ")
-    .replace(/^(.+?) is an /i, "$1 is basically an ")
-    .replace(/^(.+?) are /i, "$1 are basically ")
     .trim();
 }
 

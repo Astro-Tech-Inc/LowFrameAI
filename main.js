@@ -794,7 +794,7 @@ async function wikidataLookup(query) {
 }
 
 async function stackExchangeLookup(query) {
-  if (!isProblemRequest(query.toLowerCase()) && !/\b(error|exception|troubleshoot|debug|fix|issue|problem|bios|uefi|f1|f2|setup)\b/i.test(query)) {
+  if (!isProblemRequest(query.toLowerCase()) && !/\b(error|exception|troubleshoot|debug|fix|issue|problem|bios|uefi|f1|f2|setup|driver|drivers|linux|not work|work well)\b/i.test(query)) {
     return [];
   }
 
@@ -808,6 +808,9 @@ async function stackExchangeLookup(query) {
 
 function stackExchangeSites(query) {
   const lower = query.toLowerCase();
+  if (/\b(linux|ubuntu|debian|arch|fedora|driver|drivers|nvidia)\b/.test(lower)) {
+    return ["unix", "askubuntu", "superuser", "stackoverflow"];
+  }
   if (/\b(code|programming|python|java|javascript|c\+\+|node|npm|pypi|exception|stack trace)\b/.test(lower)) {
     return ["stackoverflow", "superuser"];
   }
@@ -984,6 +987,14 @@ async function jikanLookup(query) {
 }
 
 async function pokeLookup(query) {
+  const dexNumber = pokedexNumber(query);
+  if (dexNumber) {
+    const url = `https://pokeapi.co/api/v2/pokemon/${dexNumber}`;
+    const data = await fetchJson(url);
+    if (!data?.name) return [];
+    return [apiCandidate(`PokeAPI: ${data.name}`, url, `${capitalize(data.name)} is Pokemon #${data.id} in the National Pokedex. Types: ${(data.types || []).map((t) => t.type.name).join(", ")}.`, "", 8)];
+  }
+
   const name = cleanLookupQuery(query)
     .toLowerCase()
     .replace(/\b(pokemon|pokémon|pokedex)\b/g, " ")
@@ -1403,7 +1414,7 @@ function genericProblemQueries(query) {
 }
 
 function isProblemRequest(lower) {
-  return /\b(won't|wont|will not|can't|cant|cannot|doesn't|doesnt|not working|broken|error|issue|problem|trouble|fix|help|stuck|crash|crashing|offline|failed|failure|no display|no signal|not booting|turn on|boot|bios reset|setup screen)\b/.test(lower);
+  return /\b(won't|wont|will not|can't|cant|cannot|doesn't|doesnt|not working|not work|work well|broken|error|issue|problem|trouble|fix|help|stuck|crash|crashing|offline|failed|failure|no display|no signal|not booting|turn on|boot|bios reset|setup screen)\b/.test(lower);
 }
 
 function importantTerms(text) {
@@ -1433,6 +1444,31 @@ function visibleErrorText(text) {
   return match?.[2]?.replace(/\s+/g, " ").trim() || "";
 }
 
+function pokedexNumber(query) {
+  const lower = query.toLowerCase();
+  if (!/\b(pokemon|pokémon|pokedex)\b/.test(lower)) return null;
+  const numeric = lower.match(/\b(\d+)(?:st|nd|rd|th)?\b/)?.[1];
+  if (numeric) return Number(numeric);
+  const ordinals = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+    seventh: 7,
+    eighth: 8,
+    ninth: 9,
+    tenth: 10,
+  };
+  const word = lower.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/)?.[1];
+  return word ? ordinals[word] : null;
+}
+
+function capitalize(text) {
+  return String(text).charAt(0).toUpperCase() + String(text).slice(1);
+}
+
 function looksLikeFollowUp(text) {
   const lower = text.toLowerCase();
   return text.length < 160 && (
@@ -1456,8 +1492,16 @@ function composeAnswer(query, best, candidates = []) {
     return friendlyServerAnswer(best.answer);
   }
 
+  if (best.source?.url?.includes("pokeapi.co")) {
+    return best.source.snippet || plainFact(cleanFact(best.answer));
+  }
+
   if (best.source?.url?.includes("openstreetmap.org")) {
     return best.source.snippet || plainFact(cleanFact(best.answer));
+  }
+
+  if (isLinuxDriverQuestion(lower)) {
+    return composeLinuxDriverAnswer(query, candidates);
   }
 
   if (isProblemRequest(lower) && candidates.some(isStackExchangeCandidate)) {
@@ -1496,6 +1540,28 @@ function isStackExchangeCandidate(candidate) {
   return /stackoverflow|superuser|serverfault/i.test(candidate.source?.title || candidate.source?.url || "");
 }
 
+function isLinuxDriverQuestion(lower) {
+  return /\b(linux|ubuntu|debian|arch|fedora)\b/.test(lower) && /\b(nvidia|driver|drivers|gpu|graphics)\b/.test(lower);
+}
+
+function composeLinuxDriverAnswer(query, candidates) {
+  const sourceCount = uniqueSources(candidates.map((candidate) => candidate.source)).length;
+  const text = candidates.map((candidate) => `${candidate.source?.title || ""} ${candidate.text || ""}`).join(" ").toLowerCase();
+  const themes = [];
+  if (/\b(proprietary|closed source|binary blob|nouveau|open source)\b/.test(text)) themes.push("NVIDIA has historically depended on a proprietary driver stack while Linux desktops often expect open, kernel-integrated drivers");
+  if (/\b(kernel|dkms|module|headers)\b/.test(text)) themes.push("kernel updates can break or delay the NVIDIA kernel module until DKMS/modules rebuild correctly");
+  if (/\b(wayland|xorg|x11|compositor)\b/.test(text)) themes.push("display-server differences such as Wayland versus Xorg can expose driver bugs or missing features");
+  if (/\b(secure boot|signed|signature)\b/.test(text)) themes.push("Secure Boot can block unsigned NVIDIA modules on some systems");
+  if (/\b(hybrid|optimus|prime|intel|amd)\b/.test(text)) themes.push("hybrid laptop graphics adds another layer because the system has to switch between GPUs cleanly");
+
+  const useful = uniqueStrings(themes).slice(0, 4);
+  if (!useful.length) {
+    return `I found Linux/NVIDIA sources, but they were too scattered to make a clean explanation. The short version is that NVIDIA support depends heavily on the exact distro, kernel, desktop session, and driver branch.`;
+  }
+
+  return `The short version: NVIDIA drivers can be rough on Linux because ${joinNatural(useful)}. I checked ${sourceCount || candidates.length} sources and the pattern is not “Linux cannot do NVIDIA”; it is that NVIDIA’s driver path has more moving pieces than AMD/Intel on many distros.`;
+}
+
 function composeProblemAnswer(query, candidates) {
   const stackCandidates = candidates.filter(isStackExchangeCandidate);
   const sourceCount = uniqueSources(stackCandidates.map((candidate) => candidate.source)).length;
@@ -1519,7 +1585,7 @@ function composeProblemAnswer(query, candidates) {
     ? "I did not find an exact match for every part/model you named, so treat this as a best-match troubleshooting path, not a diagnosis."
     : "The sources line up pretty well with your symptoms.";
 
-  const followUp = /\b(none|nothing|didn't|didnt|doesn't|doesnt|still|failed|not work|not working)\b/i.test(query);
+  const followUp = /^(none|nothing|neither)\b|\b(didn't|didnt|still|failed)\b/i.test(query);
   const lead = followUp
     ? `Since the first pass did not work, I checked ${sourceCount || stackCandidates.length} next-step troubleshooting sources.`
     : `I checked ${sourceCount || stackCandidates.length} troubleshooting sources.`;
@@ -1642,6 +1708,7 @@ function requiredKeywords(query) {
     "how", "why", "wiki", "fandom", "lookup", "search", "find", "tell", "about", "bar",
     "paper", "research", "study", "journal", "coordinates", "coordinate", "location", "address",
     "anime", "manga", "pokemon", "pokedex", "crate", "package", "library",
+    "1st", "first", "second", "third", "driver", "drivers", "work", "linux",
   ]);
   return keywords(lower)
     .filter((word) => !soft.has(word))

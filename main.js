@@ -19,6 +19,7 @@ const MEDIA_API_URL = isLocalHost() ? LOCAL_MEDIA_API_URL : DEPLOYED_MEDIA_API_U
 const IMAGE_TIMEOUT_MS = 60000;
 const UPLOAD_TIMEOUT_MS = 20000;
 const VISION_TIMEOUT_MS = 60000;
+const VIDEO_TIMEOUT_MS = 180000;
 
 let uploadedImages = [];
 let tempMemory = loadTempMemory();
@@ -109,6 +110,48 @@ function addImageMessage(prompt, imageUrl) {
 
   actions.append(openLink, downloadLink);
   bubble.append(image, caption, actions);
+  article.append(speaker, bubble);
+  messages.append(article);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function addVideoMessage(prompt, videoUrl) {
+  const article = document.createElement("article");
+  article.className = "message ai";
+
+  const speaker = document.createElement("div");
+  speaker.className = "speaker";
+  speaker.textContent = "LowFrame AI";
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble image-bubble";
+
+  const video = document.createElement("video");
+  video.className = "generated-video";
+  video.src = videoUrl;
+  video.controls = true;
+  video.playsInline = true;
+
+  const caption = document.createElement("div");
+  caption.className = "image-caption";
+  caption.textContent = prompt;
+
+  const actions = document.createElement("div");
+  actions.className = "image-actions";
+
+  const openLink = document.createElement("a");
+  openLink.href = videoUrl;
+  openLink.target = "_blank";
+  openLink.rel = "noreferrer";
+  openLink.textContent = "Open";
+
+  const downloadLink = document.createElement("a");
+  downloadLink.href = videoUrl;
+  downloadLink.download = "lowframe-video.mp4";
+  downloadLink.textContent = "Download";
+
+  actions.append(openLink, downloadLink);
+  bubble.append(video, caption, actions);
   article.append(speaker, bubble);
   messages.append(article);
   messages.scrollTop = messages.scrollHeight;
@@ -217,6 +260,30 @@ chatForm.addEventListener("submit", async (event) => {
 
   messageInput.value = "";
   addMessage("user", message || "Uploaded image");
+
+  const shouldGenerateVideo = selectedMode() === "video" || isVideoGenerationRequest(message);
+  if (shouldGenerateVideo) {
+    if (!message) {
+      addMessage("ai", "Give me a prompt for the video you want.");
+      return;
+    }
+
+    setStatus("Generating video");
+    setBusy(true, "Generating");
+    try {
+      const cleanPrompt = cleanVideoPrompt(message);
+      const videoUrl = await generateVideo(cleanPrompt, uploadedImages);
+      addVideoMessage(cleanPrompt, videoUrl);
+      clearUploads();
+      setStatus("Ready");
+    } catch (error) {
+      addMessage("ai", `Video generation error: ${error.message}`);
+      setStatus("Error");
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
 
   const shouldGenerateImage = selectedMode() === "image" || isImageGenerationRequest(message);
   if (shouldGenerateImage) {
@@ -410,9 +477,19 @@ function isImageGenerationRequest(message) {
   return /^\s*(generate|create|make|draw|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|icon|scene)\b/i.test(message);
 }
 
+function isVideoGenerationRequest(message) {
+  return /^\s*(generate|create|make|render)\s+(an?\s+)?(video|clip|movie|animation)\b/i.test(message);
+}
+
 function cleanImagePrompt(message) {
   return String(message)
     .replace(/^\s*(generate|create|make|draw|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|icon|scene)\s*(of|for|showing)?\s*/i, "")
+    .trim() || message.trim();
+}
+
+function cleanVideoPrompt(message) {
+  return String(message)
+    .replace(/^\s*(generate|create|make|render)\s+(an?\s+)?(video|clip|movie|animation)\s*(of|for|showing)?\s*/i, "")
     .trim() || message.trim();
 }
 
@@ -441,6 +518,43 @@ async function generateImage(prompt) {
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error("Image generation timed out.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function generateVideo(prompt, images = []) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), VIDEO_TIMEOUT_MS);
+  try {
+    const reference = images.find((image) => image.hosted?.url)?.hosted?.url;
+    const response = await fetch(new URL("video", MEDIA_API_URL).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        startImage: reference || "",
+        duration: 3,
+        resolution: "540p",
+        aspectRatio: "16:9",
+        audio: false,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const message = await imageWorkerError(response);
+      throw new Error(message || `Video Worker returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.video) throw new Error("Video Worker did not return a video URL.");
+    return data.video;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Video generation timed out. Try a shorter prompt or try again later.");
     }
     throw error;
   } finally {

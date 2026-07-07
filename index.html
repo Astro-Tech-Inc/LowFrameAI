@@ -10,7 +10,6 @@
     <main class="app-shell">
       <header class="account-bar" aria-label="Account">
         <div class="account-status" id="account-status">Guest</div>
-        <div class="credit-status" id="credit-status"></div>
         <button class="ghost-button" id="login-open" type="button">Login</button>
         <button class="ghost-button" id="signup-open" type="button">Sign up</button>
         <button class="ghost-button hidden" id="logout-button" type="button">Logout</button>
@@ -66,6 +65,15 @@
                 <option value="athena-s2-d">Athena-S2-D</option>
                 <option value="athena-d2">Athena-D2</option>
                 <option value="athena-d2-d">Athena-D2-D</option>
+              </select>
+            </label>
+            <label class="image-model-select-label hidden">
+              Model
+              <select id="image-model-select">
+                <option value="athena-i1s">Athena-I1S</option>
+                <option value="athena-i1d">Athena-I1D</option>
+                <option value="athena-i2s">Athena-I2S</option>
+                <option value="athena-i2d">Athena-I2D</option>
               </select>
             </label>
             <div class="upload-preview" id="upload-preview"></div>
@@ -127,6 +135,18 @@
         <p>You are about to download your account password reset tokens. You cannot reset your password if you lose these. Keep these somewhere safe.</p>
         <pre id="recovery-codes"></pre>
         <button id="download-recovery" type="button" disabled>Download and continue</button>
+      </div>
+    </dialog>
+
+    <dialog id="credit-dialog">
+      <header>
+        <h2>Out of credits</h2>
+        <button id="close-credit-dialog" type="button" aria-label="Close">x</button>
+      </header>
+      <div class="credit-body">
+        <p>You have ran out of credits!</p>
+        <p>Come back tomorrow for more. You can still use I1S and I1D, followed by all of the chat models.</p>
+        <button id="credit-ok" type="button">OK</button>
       </div>
     </dialog>
 

@@ -179,11 +179,6 @@ label,
   white-space: nowrap;
 }
 
-.credit-status {
-  color: var(--muted);
-  font-size: 13px;
-}
-
 .history-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -458,6 +453,11 @@ label,
 .mode-toggle label:has(input:checked) {
   background: var(--text);
   color: var(--bg);
+}
+
+.mode-toggle label.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .upload-chip {

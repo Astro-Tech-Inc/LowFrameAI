@@ -355,6 +355,7 @@ async function lookupAnswer(message) {
       wikipediaLookup(query),
       wikidataLookup(query),
       stackExchangeLookup(query),
+      extraPublicApiLookup(query),
       minecraftWikiLookup(query),
       fandomWikiLookup(query),
       openLibraryLookup(query),
@@ -839,6 +840,296 @@ async function stackExchangeSiteSearch(site, query) {
     });
 }
 
+async function extraPublicApiLookup(query) {
+  const matched = extraApiProviders()
+    .filter((provider) => provider.match(query.toLowerCase()));
+  const providers = [
+    ...matched.filter((provider) => !provider.general),
+    ...matched.filter((provider) => provider.general),
+  ].slice(0, 16);
+  const results = await Promise.allSettled(providers.map((provider) => provider.lookup(query)));
+  return results
+    .filter((result) => result.status === "fulfilled")
+    .flatMap((result) => result.value || [])
+    .filter((candidate) => candidate.answer)
+    .slice(0, 20);
+}
+
+function extraApiProviders() {
+  const wiki = (name, api, match, boost = 1, general = false) => ({
+    name,
+    match,
+    general,
+    lookup: (query) => mediaWikiLookup({ query, api, title: name, sourceBoost: boost }),
+  });
+  const any = () => true;
+  return [
+    wiki("Simple Wikipedia", "https://simple.wikipedia.org/w/api.php", any, 1, true),
+    wiki("Wiktionary", "https://en.wiktionary.org/w/api.php", (q) => /\b(define|definition|meaning|word|etymology|pronounce|dictionary)\b/.test(q), 4),
+    wiki("Wikiquote", "https://en.wikiquote.org/w/api.php", (q) => /\b(quote|said|saying|speech)\b/.test(q), 3),
+    wiki("Wikibooks", "https://en.wikibooks.org/w/api.php", (q) => /\b(how to|tutorial|guide|learn|course|book)\b/.test(q), 3),
+    wiki("Wikiversity", "https://en.wikiversity.org/w/api.php", (q) => /\b(learn|course|study|education|lesson)\b/.test(q), 3),
+    wiki("Wikivoyage", "https://en.wikivoyage.org/w/api.php", (q) => /\b(travel|trip|visit|hotel|airport|city|country)\b/.test(q), 3),
+    wiki("Wikinews", "https://en.wikinews.org/w/api.php", (q) => /\b(news|latest|recent|today|yesterday)\b/.test(q), 2),
+    wiki("Wikimedia Commons", "https://commons.wikimedia.org/w/api.php", (q) => /\b(image|photo|picture|media|file|map)\b/.test(q), 2),
+    wiki("Wikisource", "https://en.wikisource.org/w/api.php", (q) => /\b(source text|public domain|poem|speech|document)\b/.test(q), 2),
+    { name: "MDN", match: (q) => /\b(html|css|javascript|web api|browser|dom|fetch|canvas)\b/.test(q), lookup: mdnLookup },
+    { name: "Hacker News", match: (q) => /\b(hacker news|startup|programming|tech news|yc)\b/.test(q), lookup: hackerNewsLookup },
+    { name: "Crossref", match: (q) => /\b(paper|research|journal|doi|study|citation)\b/.test(q), lookup: crossrefLookup },
+    { name: "OpenAlex", match: (q) => /\b(paper|research|journal|study|citation|author)\b/.test(q), lookup: openAlexLookup },
+    { name: "Semantic Scholar", match: (q) => /\b(paper|research|study|academic|science)\b/.test(q), lookup: semanticScholarLookup },
+    { name: "arXiv", match: (q) => /\b(arxiv|paper|research|machine learning|physics|math|computer science)\b/.test(q), lookup: arxivLookup },
+    { name: "PubMed", match: (q) => /\b(pubmed|medical|medicine|health|disease|clinical|symptom)\b/.test(q), lookup: pubMedLookup },
+    { name: "TVMaze", match: (q) => /\b(tv|show|episode|series|actor)\b/.test(q), lookup: tvMazeLookup },
+    { name: "Jikan", match: (q) => /\b(anime|manga|mal)\b/.test(q), lookup: jikanLookup },
+    { name: "PokeAPI", match: (q) => /\b(pokemon|pokémon|pokedex)\b/.test(q), lookup: pokeLookup },
+    { name: "OpenStreetMap Nominatim", match: (q) => /\b(address|map|where is|location|coordinates|geocode)\b/.test(q), lookup: nominatimLookup },
+    { name: "MusicBrainz", match: (q) => /\b(artist|album|song|band|music)\b/.test(q), lookup: musicBrainzLookup },
+    { name: "iTunes Search", match: (q) => /\b(app|podcast|song|album|movie|itunes)\b/.test(q), lookup: itunesLookup },
+    { name: "Open Food Facts", match: (q) => /\b(food|barcode|nutrition|calories|ingredient)\b/.test(q), lookup: openFoodFactsLookup },
+    { name: "GBIF", match: (q) => /\b(species|taxonomy|plant|animal|genus|biology)\b/.test(q), lookup: gbifLookup },
+    { name: "iNaturalist", match: (q) => /\b(species|plant|animal|wildlife|nature)\b/.test(q), lookup: iNaturalistLookup },
+    { name: "CoinGecko", match: (q) => /\b(crypto|bitcoin|ethereum|coin|token price)\b/.test(q), lookup: coinGeckoLookup },
+    { name: "World Bank", match: (q) => /\b(gdp|population|economy|world bank|indicator)\b/.test(q), lookup: worldBankLookup },
+    { name: "Universities", match: (q) => /\b(university|college|school)\b/.test(q), lookup: universitiesLookup },
+    { name: "crates.io", match: (q) => /\b(rust crate|crate|cargo)\b/.test(q), lookup: cratesLookup },
+    { name: "RubyGems", match: (q) => /\b(ruby gem|rubygems|gem)\b/.test(q), lookup: rubyGemsLookup },
+    { name: "Packagist", match: (q) => /\b(php package|composer package|packagist)\b/.test(q), lookup: packagistLookup },
+    { name: "Maven Central", match: (q) => /\b(maven|java library|artifact)\b/.test(q), lookup: mavenLookup },
+    { name: "NuGet", match: (q) => /\b(nuget|dotnet package|\\.net package)\b/.test(q), lookup: nugetLookup },
+    { name: "Docker Hub", match: (q) => /\b(docker image|container image|docker hub)\b/.test(q), lookup: dockerHubLookup },
+    { name: "Homebrew", match: (q) => /\b(homebrew|brew formula|brew package)\b/.test(q), lookup: homebrewLookup },
+  ];
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) return null;
+  return response.json();
+}
+
+function apiCandidate(title, url, answer, extra = "", boost = 2) {
+  if (!answer) return null;
+  return {
+    answer,
+    text: `${title} ${answer} ${extra}`,
+    sourceBoost: boost,
+    source: { title, url, snippet: answer },
+  };
+}
+
+async function mdnLookup(query) {
+  const url = `https://developer.mozilla.org/api/v1/search?q=${encodeURIComponent(query)}`;
+  const data = await fetchJson(url);
+  return (data?.documents || []).slice(0, 3).map((item) => apiCandidate(`MDN: ${item.title}`, `https://developer.mozilla.org${item.mdn_url}`, item.summary, item.title, 5)).filter(Boolean);
+}
+
+async function hackerNewsLookup(query) {
+  const url = `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=3`;
+  const data = await fetchJson(url);
+  return (data?.hits || []).map((hit) => apiCandidate(`Hacker News: ${hit.title}`, hit.url || `https://news.ycombinator.com/item?id=${hit.objectID}`, `${hit.title}. Points: ${hit.points || 0}. Comments: ${hit.num_comments || 0}.`, "", 3)).filter(Boolean);
+}
+
+async function crossrefLookup(query) {
+  const url = `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=3`;
+  const data = await fetchJson(url);
+  return (data?.message?.items || []).map((item) => apiCandidate(`Crossref: ${(item.title || [])[0]}`, item.URL, `${(item.title || [])[0] || "Research work"}${item.published?.["date-parts"]?.[0]?.[0] ? ` was published in ${item.published["date-parts"][0][0]}` : ""}.`, (item.author || []).map((a) => `${a.given || ""} ${a.family || ""}`).join(" "), 3)).filter(Boolean);
+}
+
+async function openAlexLookup(query) {
+  const url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=3`;
+  const data = await fetchJson(url);
+  return (data?.results || []).map((item) => apiCandidate(`OpenAlex: ${item.title}`, item.doi || item.id, `${item.title}. Cited by ${item.cited_by_count || 0} works.`, item.abstract_inverted_index ? Object.keys(item.abstract_inverted_index).slice(0, 40).join(" ") : "", 3)).filter(Boolean);
+}
+
+async function semanticScholarLookup(query) {
+  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=3&fields=title,abstract,url,year,citationCount`;
+  const data = await fetchJson(url);
+  return (data?.data || []).map((item) => apiCandidate(`Semantic Scholar: ${item.title}`, item.url, `${item.title}${item.year ? ` (${item.year})` : ""}. Citations: ${item.citationCount || 0}.${item.abstract ? ` ${item.abstract.slice(0, 220)}` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function arxivLookup(query) {
+  const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=3`;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const xml = await response.text();
+  return [...xml.matchAll(/<entry>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<summary>([\s\S]*?)<\/summary>[\s\S]*?<id>(.*?)<\/id>/g)]
+    .map((match) => apiCandidate(`arXiv: ${cleanXml(match[1])}`, cleanXml(match[3]), cleanXml(match[2]).slice(0, 300), cleanXml(match[1]), 3))
+    .filter(Boolean);
+}
+
+async function pubMedLookup(query) {
+  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=3&term=${encodeURIComponent(query)}`;
+  const search = await fetchJson(searchUrl);
+  const ids = search?.esearchresult?.idlist || [];
+  if (!ids.length) return [];
+  const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=${ids.join(",")}`;
+  const summary = await fetchJson(summaryUrl);
+  return ids.map((id) => {
+    const item = summary?.result?.[id];
+    return apiCandidate(`PubMed: ${item?.title}`, `https://pubmed.ncbi.nlm.nih.gov/${id}/`, `${item?.title || "PubMed article"}${item?.pubdate ? ` (${item.pubdate})` : ""}.`, "", 3);
+  }).filter(Boolean);
+}
+
+async function tvMazeLookup(query) {
+  const url = `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanLookupQuery(query))}`;
+  const data = await fetchJson(url);
+  return (data || []).slice(0, 3).map(({ show }) => apiCandidate(`TVMaze: ${show.name}`, show.url, `${show.name}${show.premiered ? ` premiered ${show.premiered}` : ""}.${show.summary ? ` ${stripHtml(show.summary).slice(0, 220)}` : ""}`, show.genres?.join(" "), 3)).filter(Boolean);
+}
+
+async function jikanLookup(query) {
+  const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(cleanLookupQuery(query))}&limit=3`;
+  const data = await fetchJson(url);
+  return (data?.data || []).map((item) => apiCandidate(`Jikan: ${item.title}`, item.url, `${item.title}${item.year ? ` (${item.year})` : ""}. Score: ${item.score || "unknown"}.${item.synopsis ? ` ${item.synopsis.slice(0, 220)}` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function pokeLookup(query) {
+  const name = cleanLookupQuery(query)
+    .toLowerCase()
+    .replace(/\b(pokemon|pokémon|pokedex)\b/g, " ")
+    .match(/[a-z0-9-]+/)?.[0];
+  if (!name) return [];
+  const url = `https://pokeapi.co/api/v2/pokemon/${encodeURIComponent(name)}`;
+  const data = await fetchJson(url);
+  if (!data?.name) return [];
+  return [apiCandidate(`PokeAPI: ${data.name}`, url, `${data.name} is Pokemon #${data.id}. Types: ${(data.types || []).map((t) => t.type.name).join(", ")}.`, "", 4)];
+}
+
+async function nominatimLookup(query) {
+  const place = cleanLookupQuery(query)
+    .replace(/\b(where is|coordinates|coordinate|address|map|location|geocode|find|show me)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&q=${encodeURIComponent(place || cleanLookupQuery(query))}`;
+  const data = await fetchJson(url);
+  return (data || []).map((item) => apiCandidate(`OpenStreetMap: ${item.display_name}`, `https://www.openstreetmap.org/${item.osm_type}/${item.osm_id}`, `${item.display_name}. Coordinates: ${item.lat}, ${item.lon}.`, item.type, 3)).filter(Boolean);
+}
+
+async function musicBrainzLookup(query) {
+  const url = `https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent(cleanLookupQuery(query))}&fmt=json&limit=3`;
+  const data = await fetchJson(url);
+  return (data?.artists || []).map((artist) => apiCandidate(`MusicBrainz: ${artist.name}`, `https://musicbrainz.org/artist/${artist.id}`, `${artist.name}${artist.country ? ` is associated with ${artist.country}` : ""}.${artist.type ? ` Type: ${artist.type}.` : ""}`, artist.disambiguation || "", 3)).filter(Boolean);
+}
+
+async function itunesLookup(query) {
+  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanLookupQuery(query))}&limit=3`;
+  const data = await fetchJson(url);
+  return (data?.results || []).map((item) => apiCandidate(`iTunes: ${item.trackName || item.collectionName || item.artistName}`, item.trackViewUrl || item.collectionViewUrl || item.artistViewUrl, `${item.trackName || item.collectionName || item.artistName} by ${item.artistName || "unknown artist"}.${item.primaryGenreName ? ` Genre: ${item.primaryGenreName}.` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function openFoodFactsLookup(query) {
+  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanLookupQuery(query))}&search_simple=1&action=process&json=1&page_size=3`;
+  const data = await fetchJson(url);
+  return (data?.products || []).map((item) => apiCandidate(`Open Food Facts: ${item.product_name}`, item.url, `${item.product_name || "Food product"}.${item.nutriscore_grade ? ` Nutri-Score: ${item.nutriscore_grade}.` : ""}${item.brands ? ` Brand: ${item.brands}.` : ""}`, item.ingredients_text || "", 3)).filter(Boolean);
+}
+
+async function gbifLookup(query) {
+  const url = `https://api.gbif.org/v1/species/search?q=${encodeURIComponent(cleanLookupQuery(query))}&limit=3`;
+  const data = await fetchJson(url);
+  return (data?.results || []).map((item) => apiCandidate(`GBIF: ${item.scientificName || item.canonicalName}`, `https://www.gbif.org/species/${item.key}`, `${item.scientificName || item.canonicalName}.${item.kingdom ? ` Kingdom: ${item.kingdom}.` : ""}${item.rank ? ` Rank: ${item.rank}.` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function iNaturalistLookup(query) {
+  const url = `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(cleanLookupQuery(query))}&per_page=3`;
+  const data = await fetchJson(url);
+  return (data?.results || []).map((item) => apiCandidate(`iNaturalist: ${item.preferred_common_name || item.name}`, `https://www.inaturalist.org/taxa/${item.id}`, `${item.preferred_common_name || item.name} is listed as ${item.name}.${item.rank ? ` Rank: ${item.rank}.` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function coinGeckoLookup(query) {
+  const searchUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(cleanLookupQuery(query))}`;
+  const search = await fetchJson(searchUrl);
+  const coin = search?.coins?.[0];
+  if (!coin) return [];
+  const priceUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(coin.id)}&vs_currencies=usd`;
+  const price = await fetchJson(priceUrl);
+  return [apiCandidate(`CoinGecko: ${coin.name}`, `https://www.coingecko.com/en/coins/${coin.id}`, `${coin.name} (${coin.symbol}) price is ${price?.[coin.id]?.usd ? `$${price[coin.id].usd}` : "not available"} in USD.`, "", 4)];
+}
+
+async function worldBankLookup(query) {
+  const country = cleanLookupQuery(query).match(/\b[a-z]{2,}\b/i)?.[0] || "world";
+  const url = `https://api.worldbank.org/v2/country/${encodeURIComponent(country)}/indicator/SP.POP.TOTL?format=json&per_page=3`;
+  const data = await fetchJson(url);
+  return (data?.[1] || []).slice(0, 2).map((item) => apiCandidate(`World Bank: ${item.country?.value}`, url, `${item.country?.value} population in ${item.date}: ${item.value ? Number(item.value).toLocaleString() : "unknown"}.`, "population economy indicator", 3)).filter(Boolean);
+}
+
+async function universitiesLookup(query) {
+  const url = `https://universities.hipolabs.com/search?name=${encodeURIComponent(cleanLookupQuery(query))}`;
+  const data = await fetchJson(url);
+  return (data || []).slice(0, 3).map((item) => apiCandidate(`Universities: ${item.name}`, item.web_pages?.[0] || url, `${item.name} is in ${item.country}.${item.domains?.[0] ? ` Domain: ${item.domains[0]}.` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function cratesLookup(query) {
+  const name = packageSearchTerm(query, ["rust", "crate", "crates", "cargo"]);
+  const exactUrl = `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`;
+  const exact = await fetchJson(exactUrl);
+  const exactCandidate = exact?.crate
+    ? apiCandidate(`crates.io: ${exact.crate.name}`, `https://crates.io/crates/${exact.crate.name}`, `${exact.crate.name} latest stable version is ${exact.crate.max_stable_version || exact.crate.newest_version || "unknown"}.${exact.crate.description ? ` ${exact.crate.description}` : ""}`, "", 6)
+    : null;
+  const url = `https://crates.io/api/v1/crates?q=${encodeURIComponent(name)}&per_page=3`;
+  const data = await fetchJson(url);
+  const search = (data?.crates || [])
+    .filter((item) => item.name !== exact?.crate?.name)
+    .map((item) => apiCandidate(`crates.io: ${item.name}`, `https://crates.io/crates/${item.name}`, `${item.name} latest stable version is ${item.max_stable_version || item.newest_version || "unknown"}.${item.description ? ` ${item.description}` : ""}`, "", 3))
+    .filter(Boolean);
+  return [exactCandidate, ...search].filter(Boolean);
+}
+
+async function rubyGemsLookup(query) {
+  const name = packageSearchTerm(query, ["ruby", "gem", "rubygems"]);
+  const url = `https://rubygems.org/api/v1/search.json?query=${encodeURIComponent(name)}`;
+  const data = await fetchJson(url);
+  return (data || []).slice(0, 3).map((item) => apiCandidate(`RubyGems: ${item.name}`, item.project_uri, `${item.name} latest version is ${item.version}.${item.info ? ` ${item.info.slice(0, 180)}` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function packagistLookup(query) {
+  const name = packageSearchTerm(query, ["php", "composer", "package", "packagist"]);
+  const url = `https://packagist.org/search.json?q=${encodeURIComponent(name)}&per_page=3`;
+  const data = await fetchJson(url);
+  return (data?.results || []).map((item) => apiCandidate(`Packagist: ${item.name}`, item.url, `${item.name}.${item.description ? ` ${item.description}` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function mavenLookup(query) {
+  const name = packageSearchTerm(query, ["maven", "java", "library", "artifact"]);
+  const url = `https://search.maven.org/solrsearch/select?q=${encodeURIComponent(name)}&rows=3&wt=json`;
+  const data = await fetchJson(url);
+  return (data?.response?.docs || []).map((item) => apiCandidate(`Maven Central: ${item.id}`, `https://search.maven.org/artifact/${item.g}/${item.a}`, `${item.id} latest version is ${item.latestVersion || "unknown"}.`, "", 3)).filter(Boolean);
+}
+
+async function nugetLookup(query) {
+  const name = packageSearchTerm(query, ["nuget", "dotnet", ".net", "package"]);
+  const url = `https://azuresearch-usnc.nuget.org/query?q=${encodeURIComponent(name)}&take=3`;
+  const data = await fetchJson(url);
+  return (data?.data || []).map((item) => apiCandidate(`NuGet: ${item.id}`, item.projectUrl || `https://www.nuget.org/packages/${item.id}`, `${item.id} latest version is ${item.version}.${item.description ? ` ${item.description.slice(0, 180)}` : ""}`, "", 3)).filter(Boolean);
+}
+
+async function dockerHubLookup(query) {
+  const name = packageSearchTerm(query, ["docker", "image", "container", "hub"]);
+  const url = `https://hub.docker.com/v2/search/repositories/?query=${encodeURIComponent(name)}&page_size=3`;
+  const data = await fetchJson(url);
+  return (data?.results || []).map((item) => apiCandidate(`Docker Hub: ${item.repo_name}`, `https://hub.docker.com/r/${item.repo_name}`, `${item.repo_name}.${item.short_description ? ` ${item.short_description}` : ""} Stars: ${item.star_count || 0}.`, "", 3)).filter(Boolean);
+}
+
+async function homebrewLookup(query) {
+  const name = packageSearchTerm(query, ["homebrew", "brew", "formula", "package"]).toLowerCase().match(/[a-z0-9.+-]+/)?.[0];
+  if (!name) return [];
+  const url = `https://formulae.brew.sh/api/formula/${encodeURIComponent(name)}.json`;
+  const data = await fetchJson(url);
+  if (!data?.name) return [];
+  return [apiCandidate(`Homebrew: ${data.name}`, `https://formulae.brew.sh/formula/${data.name}`, `${data.name} latest stable version is ${data.versions?.stable || "unknown"}.${data.desc ? ` ${data.desc}` : ""}`, "", 3)];
+}
+
+function cleanXml(text) {
+  return stripHtml(String(text).replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&"));
+}
+
+function packageSearchTerm(query, removeWords) {
+  const remove = new RegExp(`\\b(${removeWords.map(escapeRegExp).join("|")})\\b`, "gi");
+  return cleanLookupQuery(query)
+    .replace(remove, " ")
+    .replace(/\s+/g, " ")
+    .trim() || cleanLookupQuery(query);
+}
+
 async function minecraftWikiLookup(query) {
   if (query.toLowerCase().includes("fandom")) return [];
   if (!query.toLowerCase().includes("minecraft") && !/\brd-\d+\b|\brd\b/i.test(query)) return [];
@@ -956,7 +1247,15 @@ function sourceScore(query, candidate) {
   if (url.includes("npmjs.com") && /\b(npm|node package)\b/.test(lower)) score += 10;
   if (url.includes("pypi.org") && /\b(pypi|python package|pip package)\b/.test(lower)) score += 10;
   if (url.includes("openlibrary.org") && /\b(book|author|novel|isbn)\b/.test(lower)) score += 8;
+  if (url.includes("openstreetmap.org") && /\b(address|map|where is|location|coordinates|geocode)\b/.test(lower)) score += 10;
+  if ((url.includes("semanticscholar.org") || url.includes("openalex.org") || url.includes("crossref.org") || url.includes("arxiv.org")) && /\b(paper|research|study|journal)\b/.test(lower)) score += 8;
+  if (url.includes("pokeapi.co") && /\b(pokemon|pokémon|pokedex)\b/.test(lower)) score += 15;
+  if (isPackageSource(url) && /\b(crate|package|library|gem|maven|nuget|docker|brew|cargo|composer)\b/.test(lower)) score += 12;
   return score;
+}
+
+function isPackageSource(url) {
+  return /crates\.io|rubygems\.org|packagist\.org|maven\.org|nuget\.org|docker\.com|formulae\.brew\.sh|npmjs\.com|pypi\.org/.test(url);
 }
 
 function importantPhrases(query) {
@@ -981,7 +1280,10 @@ function lookupQueries(message) {
   const clean = cleanLookupQuery(message);
   const lowered = clean.toLowerCase();
   const memoryTopic = memoryTopicText();
+  const followUp = memoryTopic && looksLikeFollowUp(clean);
+  const baseQuery = followUp ? `${memoryTopic} ${clean}` : clean;
   const queries = [
+    baseQuery,
     clean,
     clean
       .replace(/\b(go|look|check)\s+(on|at)\s+.+?\s+for\s+help\.?/i, "")
@@ -989,9 +1291,11 @@ function lookupQueries(message) {
       .trim(),
   ];
 
-  if (memoryTopic && looksLikeFollowUp(clean)) {
-    queries.push(`${memoryTopic} ${clean}`);
+  if (followUp) {
     queries.push(`${memoryTopic} ${clean} troubleshooting`);
+    queries.push(`${memoryTopic} advanced troubleshooting`);
+    queries.push(`${memoryTopic} after basic troubleshooting`);
+    queries.push(`${memoryTopic} next steps`);
   }
 
   for (const expanded of genericProblemQueries(clean)) {
@@ -1132,8 +1436,8 @@ function visibleErrorText(text) {
 function looksLikeFollowUp(text) {
   const lower = text.toLowerCase();
   return text.length < 160 && (
-    /^(it|that|this|now|still|also|actually|no|yes|ok|okay)\b/.test(lower) ||
-    /\b(f1|f2|continue|setup|error|screen|message|same|different|instead|now)\b/.test(lower)
+    /^(it|that|this|now|still|also|actually|no|yes|ok|okay|none|nothing|neither)\b/.test(lower) ||
+    /\b(f1|f2|continue|setup|error|screen|message|same|different|instead|now|worked|work|didn't|didnt|doesn't|doesnt|failed|next)\b/.test(lower)
   );
 }
 
@@ -1150,6 +1454,10 @@ function composeAnswer(query, best, candidates = []) {
 
   if (best.source?.url?.includes("mcsrvstat.us")) {
     return friendlyServerAnswer(best.answer);
+  }
+
+  if (best.source?.url?.includes("openstreetmap.org")) {
+    return best.source.snippet || plainFact(cleanFact(best.answer));
   }
 
   if (isProblemRequest(lower) && candidates.some(isStackExchangeCandidate)) {
@@ -1211,7 +1519,11 @@ function composeProblemAnswer(query, candidates) {
     ? "I did not find an exact match for every part/model you named, so treat this as a best-match troubleshooting path, not a diagnosis."
     : "The sources line up pretty well with your symptoms.";
 
-  return `I checked ${sourceCount || stackCandidates.length} troubleshooting sources. The common pattern is ${joinNatural(uniqueThemes)}. ${exactNote} Start with the simplest split-test: remove extras, confirm power connections, try one RAM stick, check whether the machine reaches BIOS, and then narrow from display/GPU versus boot-drive detection based on what appears on screen.`;
+  const followUp = /\b(none|nothing|didn't|didnt|doesn't|doesnt|still|failed|not work|not working)\b/i.test(query);
+  const lead = followUp
+    ? `Since the first pass did not work, I checked ${sourceCount || stackCandidates.length} next-step troubleshooting sources.`
+    : `I checked ${sourceCount || stackCandidates.length} troubleshooting sources.`;
+  return `${lead} The common pattern is ${joinNatural(uniqueThemes)}. ${exactNote} The next useful move is to isolate which stage fails: power, POST, display, BIOS, or boot drive. Change one thing at a time and use what changes on screen/fans/debug lights to narrow it down.`;
 }
 
 function summarizeTitles(candidates) {
@@ -1234,8 +1546,13 @@ function mismatchReason(query, best, score) {
   const missing = required.filter((word) => !text.includes(word));
   const hasSpecificToken = required.some((word) => /[0-9]/.test(word) || word.length >= 6);
   const problemSource = isProblemRequest(query.toLowerCase()) && /stackexchange|stackoverflow|superuser|serverfault/i.test(best.source?.title || best.source?.url || "");
+  const packageSource = isPackageSource(best.source?.url || "") && required.some((word) => text.includes(word));
 
   if (problemSource && problemOverlap(query, text) >= 2) {
+    return "";
+  }
+
+  if (packageSource) {
     return "";
   }
 
@@ -1323,6 +1640,8 @@ function requiredKeywords(query) {
   const soft = new Set([
     "minecraft", "server", "version", "liked", "most", "best", "what", "who", "where", "when",
     "how", "why", "wiki", "fandom", "lookup", "search", "find", "tell", "about", "bar",
+    "paper", "research", "study", "journal", "coordinates", "coordinate", "location", "address",
+    "anime", "manga", "pokemon", "pokedex", "crate", "package", "library",
   ]);
   return keywords(lower)
     .filter((word) => !soft.has(word))

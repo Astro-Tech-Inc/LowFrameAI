@@ -9,9 +9,14 @@ const sourcesDialog = document.querySelector("#sources-dialog");
 const sourcesList = document.querySelector("#sources-list");
 const closeSources = document.querySelector("#close-sources");
 const accountStatus = document.querySelector("#account-status");
+const creditStatus = document.querySelector("#credit-status");
 const loginOpen = document.querySelector("#login-open");
 const signupOpen = document.querySelector("#signup-open");
 const logoutButton = document.querySelector("#logout-button");
+const historyPanel = document.querySelector("#history-panel");
+const historyList = document.querySelector("#history-list");
+const newChatButton = document.querySelector("#new-chat");
+const modelSelect = document.querySelector("#model-select");
 const authDialog = document.querySelector("#auth-dialog");
 const closeAuth = document.querySelector("#close-auth");
 const loginForm = document.querySelector("#login-form");
@@ -24,6 +29,7 @@ const downloadRecovery = document.querySelector("#download-recovery");
 const LOWFRAME_MEMORY_KEY = "lowframe_temp_memory_v1";
 const LOWFRAME_MEMORY_LIMIT = 12;
 const LOWFRAME_SESSION_KEY = "lowframe_auth_session_v1";
+const LOWFRAME_MODEL_KEY = "lowframe_model_v1";
 const API_TIMEOUT_MS = 7000;
 const AUTH_API_URL = "https://lowframe-auth.897mmo0216.workers.dev/";
 const IMAGE_API_URL = "https://imagegen.897mmo0216.workers.dev/";
@@ -38,7 +44,21 @@ const FETCH_IMAGE_TIMEOUT_MS = 12000;
 let uploadedImages = [];
 let tempMemory = loadTempMemory();
 let currentUser = null;
+let smartCredits = 0;
+let currentChatId = "";
+let savedChats = [];
 let pendingRecoveryCodes = [];
+
+const ATHENA_MODELS = {
+  "athena-s1": { label: "Athena-S1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
+  "athena-s1-d": { label: "Athena-S1-D", account: false, deep: false, direct: true, sourceLimit: 14, smart: false },
+  "athena-d1": { label: "Athena-D1", account: false, deep: true, direct: false, sourceLimit: 30, smart: false },
+  "athena-d1-d": { label: "Athena-D1-D", account: false, deep: true, direct: true, sourceLimit: 30, smart: false },
+  "athena-s2": { label: "Athena-S2", account: true, deep: false, direct: false, sourceLimit: 60, smart: true },
+  "athena-s2-d": { label: "Athena-S2-D", account: true, deep: false, direct: true, sourceLimit: 80, smart: true },
+  "athena-d2": { label: "Athena-D2", account: true, deep: true, direct: false, sourceLimit: 100, smart: true },
+  "athena-d2-d": { label: "Athena-D2-D", account: true, deep: true, direct: true, sourceLimit: 120, smart: true },
+};
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -58,6 +78,26 @@ function selectedMode() {
   return document.querySelector('input[name="response-mode"]:checked')?.value || "chat";
 }
 
+function selectedAthenaModel() {
+  const value = modelSelect?.value || localStorage.getItem(LOWFRAME_MODEL_KEY) || "athena-s1";
+  const model = ATHENA_MODELS[value] || ATHENA_MODELS["athena-s1"];
+  if (model.account && !currentUser) return ATHENA_MODELS["athena-s1"];
+  return model;
+}
+
+function updateModelUi() {
+  if (!modelSelect) return;
+  const saved = localStorage.getItem(LOWFRAME_MODEL_KEY);
+  if (saved && ATHENA_MODELS[saved]) modelSelect.value = saved;
+  for (const option of modelSelect.options) {
+    const model = ATHENA_MODELS[option.value];
+    option.disabled = Boolean(model?.account && !currentUser);
+  }
+  if (ATHENA_MODELS[modelSelect.value]?.account && !currentUser) {
+    modelSelect.value = "athena-s1";
+  }
+}
+
 function sessionToken() {
   return localStorage.getItem(LOWFRAME_SESSION_KEY) || "";
 }
@@ -74,15 +114,23 @@ function updateAccountUi(user = currentUser) {
   currentUser = user;
   if (user) {
     if (accountStatus) accountStatus.textContent = user.username || user.email || "Account";
+    if (creditStatus) creditStatus.textContent = `Smart credits: ${smartCredits}`;
     loginOpen?.classList.add("hidden");
     signupOpen?.classList.add("hidden");
     logoutButton?.classList.remove("hidden");
+    historyPanel?.classList.remove("hidden");
   } else {
     if (accountStatus) accountStatus.textContent = "Guest";
+    if (creditStatus) creditStatus.textContent = "";
     loginOpen?.classList.remove("hidden");
     signupOpen?.classList.remove("hidden");
     logoutButton?.classList.add("hidden");
+    historyPanel?.classList.add("hidden");
+    currentChatId = "";
+    savedChats = [];
+    renderChatList();
   }
+  updateModelUi();
 }
 
 async function authRequest(path, options = {}) {
@@ -109,9 +157,23 @@ async function refreshAccount() {
   try {
     const data = await authRequest("me");
     updateAccountUi(data.user);
+    await refreshCredits();
+    await loadChatList();
   } catch {
     setSessionToken("");
     updateAccountUi(null);
+  }
+}
+
+async function refreshCredits() {
+  if (!currentUser) return;
+  try {
+    const data = await authRequest("credits");
+    smartCredits = Number(data.credits || 0);
+    updateAccountUi(currentUser);
+  } catch {
+    smartCredits = 0;
+    updateAccountUi(currentUser);
   }
 }
 
@@ -174,6 +236,87 @@ function recoveryCodesText(codes) {
     ...codes.map((code, index) => `${index + 1}. ${code}`),
     "",
   ].join("\n");
+}
+
+async function loadChatList() {
+  if (!currentUser) return;
+  try {
+    const data = await authRequest("chats");
+    savedChats = data.chats || [];
+    renderChatList();
+  } catch {
+    savedChats = [];
+    renderChatList();
+  }
+}
+
+function renderChatList() {
+  if (!historyList) return;
+  historyList.innerHTML = "";
+  for (const chat of savedChats) {
+    const button = document.createElement("button");
+    button.className = "history-item";
+    button.classList.toggle("active", chat.id === currentChatId);
+    button.type = "button";
+    const title = document.createElement("span");
+    title.textContent = chat.title || "New chat";
+    const time = document.createElement("small");
+    time.textContent = chat.updated_at ? new Date(chat.updated_at).toLocaleString() : "";
+    button.append(title, time);
+    button.addEventListener("click", () => openSavedChat(chat.id));
+    historyList.append(button);
+  }
+}
+
+async function ensureCurrentChat(title = "New chat") {
+  if (!currentUser) return "";
+  if (currentChatId) return currentChatId;
+  const data = await authRequest("chats", {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+  currentChatId = data.chat.id;
+  await loadChatList();
+  return currentChatId;
+}
+
+async function saveChatMessage(role, content, sources = [], model = "") {
+  if (!currentUser || !content) return;
+  try {
+    const chatId = await ensureCurrentChat(content);
+    await authRequest(`chats/${encodeURIComponent(chatId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ role, content, sources, model }),
+    });
+    await loadChatList();
+  } catch {
+    // Chat saving should never block the answer.
+  }
+}
+
+async function openSavedChat(chatId) {
+  if (!currentUser) return;
+  setStatus("Loading chat");
+  try {
+    const data = await authRequest(`chats/${encodeURIComponent(chatId)}`);
+    currentChatId = data.chat.id;
+    messages.innerHTML = "";
+    for (const item of data.messages || []) {
+      addMessage(item.role, item.content, item.sources || []);
+    }
+    renderChatList();
+    setStatus("Ready");
+  } catch (error) {
+    addMessage("ai", `Could not load chat: ${error.message}`);
+    setStatus("Error");
+  }
+}
+
+function startNewChat() {
+  currentChatId = "";
+  messages.innerHTML = "";
+  addMessage("ai", "Ask a question!");
+  renderChatList();
 }
 
 function addMessage(role, text, sources = []) {
@@ -413,6 +556,7 @@ chatForm.addEventListener("submit", async (event) => {
 
   messageInput.value = "";
   addMessage("user", message || "Uploaded image");
+  saveChatMessage("user", message || "Uploaded image", [], selectedAthenaModel().label);
 
   const shouldFetchImages = selectedMode() === "fetch" || isImageFetchRequest(message);
   if (shouldFetchImages) {
@@ -427,6 +571,11 @@ chatForm.addEventListener("submit", async (event) => {
       const query = cleanImageFetchPrompt(message);
       const images = await fetchPublicImages(query);
       addFetchedImagesMessage(query, images);
+      saveChatMessage("ai", `Fetched ${images.length} public image${images.length === 1 ? "" : "s"} for ${query}.`, images.map((item) => ({
+        title: item.title || item.source || "Image",
+        url: item.pageUrl || item.imageUrl,
+        snippet: item.source || "",
+      })), selectedAthenaModel().label);
       clearUploads();
       setStatus("Ready");
     } catch (error) {
@@ -450,6 +599,7 @@ chatForm.addEventListener("submit", async (event) => {
     try {
       const imageUrl = await generateImage(cleanImagePrompt(message));
       addImageMessage(cleanImagePrompt(message), imageUrl);
+      saveChatMessage("ai", `Generated image: ${cleanImagePrompt(message)}`, [{ title: "Generated image", url: imageUrl }], selectedAthenaModel().label);
       clearUploads();
       setStatus("Ready");
     } catch (error) {
@@ -464,8 +614,10 @@ chatForm.addEventListener("submit", async (event) => {
   setStatus("Thinking");
   setBusy(true, "Thinking");
   try {
-    const response = await staticAnswer(message, uploadedImages);
+    const model = selectedAthenaModel();
+    const response = await staticAnswer(message, uploadedImages, model);
     addMessage("ai", response.answer, response.sources || []);
+    saveChatMessage("ai", response.answer, response.sources || [], model.label);
     rememberTurn(message, response);
     clearUploads();
     setStatus("Ready");
@@ -504,7 +656,7 @@ imageUpload.addEventListener("change", async () => {
   }
 });
 
-async function staticAnswer(message, images) {
+async function staticAnswer(message, images, model = selectedAthenaModel()) {
   if (images.length) {
     return visionAnswer(message, images).catch((error) => ({
       answer: `I can see the upload, but the vision check failed: ${error.message}\n\n${imageMetadataAnswer(images)}`,
@@ -540,12 +692,13 @@ async function staticAnswer(message, images) {
     return known;
   }
 
-  const direct = await directApiAnswer(message);
+  const direct = await directApiAnswer(message, model);
   if (direct) {
-    return direct;
+    return smartSynthesizeIfAvailable(message, direct, model);
   }
 
-  return lookupAnswer(message);
+  const lookup = await lookupAnswer(message, model);
+  return smartSynthesizeIfAvailable(message, lookup, model);
 }
 
 function knownStaticAnswer(message) {
@@ -993,7 +1146,7 @@ async function correctionAnswer(message) {
   return null;
 }
 
-async function directApiAnswer(message) {
+async function directApiAnswer(message, model = selectedAthenaModel()) {
   const results = await Promise.allSettled([
     sportsLookup(message),
     minecraftServerStatusLookup(message),
@@ -1032,12 +1185,12 @@ async function directApiAnswer(message) {
     : composeAnswer(message, best, candidates);
   return {
     answer,
-    sources: uniqueSources(candidates.slice(0, 6).map((candidate) => candidate.source)),
+    sources: uniqueSources(candidates.slice(0, model.sourceLimit || 6).map((candidate) => candidate.source)),
   };
 }
 
-async function lookupAnswer(message) {
-  const queries = lookupQueries(message);
+async function lookupAnswer(message, model = selectedAthenaModel()) {
+  const queries = lookupQueries(message, model);
   const mainQuery = queries[0];
   const tasks = [
     mojangMinecraftLookup(mainQuery),
@@ -1073,7 +1226,7 @@ async function lookupAnswer(message) {
     const best = candidates[0];
     const bestScore = scoreCandidate(mainQuery, best);
     const useful = candidates.filter((candidate) => scoreCandidate(mainQuery, candidate) >= Math.max(4, bestScore - 10));
-    const sources = uniqueSources(useful.slice(0, 7).map((candidate) => candidate.source));
+    const sources = uniqueSources(useful.slice(0, model.sourceLimit || 7).map((candidate) => candidate.source));
     const mismatch = mismatchReason(mainQuery, best, bestScore);
     if (mismatch) {
       return {
@@ -1091,6 +1244,34 @@ async function lookupAnswer(message) {
     answer: `I could not find enough source-backed info for "${mainQuery}". ${suggestBetterQuery(mainQuery)}`,
     sources: [],
   };
+}
+
+async function smartSynthesizeIfAvailable(message, response, model) {
+  if (!model.smart || !currentUser || !response?.answer) return response;
+  const cost = model.direct ? 2 : 1;
+  if (smartCredits < cost) return response;
+
+  try {
+    setStatus(`Athena ${model.direct ? "direct" : "smart"} thinking`);
+    const data = await authRequest("ai-chat", {
+      method: "POST",
+      body: JSON.stringify({
+        question: message,
+        draft: response.answer,
+        sources: response.sources || [],
+        history: tempMemory.slice(-8),
+        model: model.label.toLowerCase(),
+      }),
+    });
+    smartCredits = Number(data.credits ?? smartCredits);
+    updateAccountUi(currentUser);
+    return {
+      answer: data.answer,
+      sources: response.sources || [],
+    };
+  } catch {
+    return response;
+  }
 }
 
 async function minecraftServerStatusLookup(query) {
@@ -2458,7 +2639,7 @@ function keywords(text) {
   return String(text).toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => !stop.has(word)) || [];
 }
 
-function lookupQueries(message) {
+function lookupQueries(message, model = selectedAthenaModel()) {
   const clean = cleanLookupQuery(message);
   const lowered = clean.toLowerCase();
   const memoryTopic = memoryTopicText();
@@ -2513,7 +2694,8 @@ function lookupQueries(message) {
     queries.push("AMD Ryzen Intel Core CPU comparison performance power price");
   }
 
-  return uniqueStrings(queries.filter(Boolean)).slice(0, 12);
+  const limit = model.deep ? 18 : 8;
+  return uniqueStrings(queries.filter(Boolean)).slice(0, limit);
 }
 
 function cleanLookupQuery(message) {
@@ -3521,6 +3703,8 @@ loginForm?.addEventListener("submit", async (event) => {
     });
     setSessionToken(data.sessionToken);
     updateAccountUi(data.user);
+    await refreshCredits();
+    await loadChatList();
     authDialog.close();
     authMessage("login-message", "");
   } catch (error) {
@@ -3542,6 +3726,8 @@ signupForm?.addEventListener("submit", async (event) => {
     });
     setSessionToken(data.sessionToken);
     updateAccountUi(data.user);
+    await refreshCredits();
+    await loadChatList();
     authDialog.close();
     authMessage("signup-message", "");
     showRecoveryCodes(data.recoveryCodes || []);
@@ -3580,6 +3766,13 @@ logoutButton?.addEventListener("click", async () => {
   updateAccountUi(null);
 });
 
+newChatButton?.addEventListener("click", startNewChat);
+
+modelSelect?.addEventListener("change", () => {
+  localStorage.setItem(LOWFRAME_MODEL_KEY, modelSelect.value);
+  updateModelUi();
+});
+
 downloadRecovery?.addEventListener("click", () => {
   const blob = new Blob([recoveryCodesText(pendingRecoveryCodes)], { type: "text/plain" });
   const link = document.createElement("a");
@@ -3594,4 +3787,5 @@ downloadRecovery?.addEventListener("click", () => {
 });
 
 handleOAuthReturn();
+updateModelUi();
 refreshAccount();

@@ -86,10 +86,14 @@ textarea:focus {
 .app-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   gap: 10px;
   height: 100vh;
   padding: 16px;
+}
+
+.account-bar {
+  grid-column: 1 / -1;
 }
 
 .chat-panel,
@@ -168,6 +172,67 @@ label,
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.credit-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px;
+}
+
+.history-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.history-item {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 8px;
+  text-align: left;
+}
+
+.history-item.active {
+  border-color: var(--accent);
+}
+
+.history-item span,
+.history-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .messages {
@@ -328,6 +393,20 @@ label,
   flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
+}
+
+.model-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-select-label select {
+  width: 150px;
+  min-height: 34px;
+  padding: 6px 8px;
 }
 
 .mode-toggle {
@@ -638,6 +717,10 @@ dialog header {
     grid-template-columns: 1fr;
     height: auto;
     min-height: 100vh;
+  }
+
+  .history-panel {
+    max-height: 180px;
   }
 
   .chat-panel {

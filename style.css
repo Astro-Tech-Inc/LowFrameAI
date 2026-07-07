@@ -46,6 +46,17 @@ button:disabled {
   opacity: 0.65;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.ghost-button,
+.secondary-button {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 textarea {
   width: 100%;
   resize: vertical;
@@ -104,6 +115,14 @@ textarea:focus {
   padding: 16px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 h1,
 h2,
 p {
@@ -129,6 +148,15 @@ label,
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.account-status {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -506,7 +534,8 @@ dialog header {
   padding: 12px 14px;
 }
 
-#close-sources {
+#close-sources,
+#close-auth {
   min-height: 32px;
   width: 32px;
   padding: 0;
@@ -532,6 +561,66 @@ dialog header {
 
 .source-item span {
   color: var(--muted);
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-tab {
+  min-height: 42px;
+  border-radius: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.auth-tab:last-child {
+  border-right: 0;
+}
+
+.auth-tab.active {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.auth-panel {
+  display: none;
+  gap: 12px;
+  padding: 14px;
+}
+
+.auth-panel.active {
+  display: grid;
+}
+
+.auth-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.auth-message {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.recovery-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+#recovery-codes {
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #000;
+  color: var(--text);
+  padding: 12px;
 }
 
 @media (max-width: 920px) {

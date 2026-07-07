@@ -9,7 +9,6 @@ const sourcesDialog = document.querySelector("#sources-dialog");
 const sourcesList = document.querySelector("#sources-list");
 const closeSources = document.querySelector("#close-sources");
 const accountStatus = document.querySelector("#account-status");
-const creditStatus = document.querySelector("#credit-status");
 const loginOpen = document.querySelector("#login-open");
 const signupOpen = document.querySelector("#signup-open");
 const logoutButton = document.querySelector("#logout-button");
@@ -17,6 +16,7 @@ const historyPanel = document.querySelector("#history-panel");
 const historyList = document.querySelector("#history-list");
 const newChatButton = document.querySelector("#new-chat");
 const modelSelect = document.querySelector("#model-select");
+const imageModelSelect = document.querySelector("#image-model-select");
 const authDialog = document.querySelector("#auth-dialog");
 const closeAuth = document.querySelector("#close-auth");
 const loginForm = document.querySelector("#login-form");
@@ -25,11 +25,15 @@ const recoverForm = document.querySelector("#recover-form");
 const recoveryDialog = document.querySelector("#recovery-dialog");
 const recoveryCodesEl = document.querySelector("#recovery-codes");
 const downloadRecovery = document.querySelector("#download-recovery");
+const creditDialog = document.querySelector("#credit-dialog");
+const closeCreditDialog = document.querySelector("#close-credit-dialog");
+const creditOk = document.querySelector("#credit-ok");
 
 const LOWFRAME_MEMORY_KEY = "lowframe_temp_memory_v1";
 const LOWFRAME_MEMORY_LIMIT = 12;
 const LOWFRAME_SESSION_KEY = "lowframe_auth_session_v1";
 const LOWFRAME_MODEL_KEY = "lowframe_model_v1";
+const LOWFRAME_IMAGE_MODEL_KEY = "lowframe_image_model_v1";
 const API_TIMEOUT_MS = 7000;
 const AUTH_API_URL = "https://lowframe-auth.897mmo0216.workers.dev/";
 const IMAGE_API_URL = "https://imagegen.897mmo0216.workers.dev/";
@@ -60,6 +64,13 @@ const ATHENA_MODELS = {
   "athena-d2-d": { label: "Athena-D2-D", account: true, deep: true, direct: true, sourceLimit: 120, smart: true },
 };
 
+const ATHENA_IMAGE_MODELS = {
+  "athena-i1s": { label: "Athena-I1S", account: false, creditCost: 0, model: "flux-klein", quality: "balanced", direct: false, smart: false },
+  "athena-i1d": { label: "Athena-I1D", account: false, creditCost: 0, model: "flux-klein", quality: "high", direct: true, smart: false },
+  "athena-i2s": { label: "Athena-I2S", account: true, creditCost: 1, model: "flux-2-klein", quality: "balanced", direct: false, smart: true },
+  "athena-i2d": { label: "Athena-I2D", account: true, creditCost: 2, model: "flux-2-klein", quality: "high", direct: true, smart: true },
+};
+
 function setStatus(text) {
   statusEl.textContent = text;
 }
@@ -85,17 +96,52 @@ function selectedAthenaModel() {
   return model;
 }
 
+function selectedImageModel() {
+  const value = imageModelSelect?.value || localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY) || "athena-i1s";
+  const model = ATHENA_IMAGE_MODELS[value] || ATHENA_IMAGE_MODELS["athena-i1s"];
+  if (model.account && !currentUser) return ATHENA_IMAGE_MODELS["athena-i1s"];
+  return model;
+}
+
 function updateModelUi() {
-  if (!modelSelect) return;
-  const saved = localStorage.getItem(LOWFRAME_MODEL_KEY);
-  if (saved && ATHENA_MODELS[saved]) modelSelect.value = saved;
-  for (const option of modelSelect.options) {
-    const model = ATHENA_MODELS[option.value];
-    option.disabled = Boolean(model?.account && !currentUser);
+  const mode = selectedMode();
+  if (modelSelect) {
+    const saved = localStorage.getItem(LOWFRAME_MODEL_KEY);
+    if (saved && ATHENA_MODELS[saved]) modelSelect.value = saved;
+    for (const option of modelSelect.options) {
+      const model = ATHENA_MODELS[option.value];
+      option.disabled = Boolean(model?.account && !currentUser);
+    }
+    if (ATHENA_MODELS[modelSelect.value]?.account && !currentUser) {
+      modelSelect.value = "athena-s1";
+    }
+    modelSelect.closest(".model-select-label")?.classList.toggle("hidden", mode !== "chat");
   }
-  if (ATHENA_MODELS[modelSelect.value]?.account && !currentUser) {
-    modelSelect.value = "athena-s1";
+
+  if (imageModelSelect) {
+    const saved = localStorage.getItem(LOWFRAME_IMAGE_MODEL_KEY);
+    if (saved && ATHENA_IMAGE_MODELS[saved]) imageModelSelect.value = saved;
+    for (const option of imageModelSelect.options) {
+      const model = ATHENA_IMAGE_MODELS[option.value];
+      option.disabled = Boolean(model?.account && !currentUser);
+    }
+    if (ATHENA_IMAGE_MODELS[imageModelSelect.value]?.account && !currentUser) {
+      imageModelSelect.value = "athena-i1s";
+    }
+    imageModelSelect.closest(".image-model-select-label")?.classList.toggle("hidden", mode !== "image");
   }
+}
+
+function updateModeUi() {
+  const fetchInput = document.querySelector('input[name="response-mode"][value="fetch"]');
+  if (fetchInput) {
+    fetchInput.disabled = !currentUser;
+    fetchInput.closest(".mode-option")?.classList.toggle("disabled", !currentUser);
+    if (!currentUser && fetchInput.checked) {
+      document.querySelector('input[name="response-mode"][value="chat"]').checked = true;
+    }
+  }
+  updateModelUi();
 }
 
 function sessionToken() {
@@ -114,14 +160,12 @@ function updateAccountUi(user = currentUser) {
   currentUser = user;
   if (user) {
     if (accountStatus) accountStatus.textContent = user.username || user.email || "Account";
-    if (creditStatus) creditStatus.textContent = `Smart credits: ${smartCredits}`;
     loginOpen?.classList.add("hidden");
     signupOpen?.classList.add("hidden");
     logoutButton?.classList.remove("hidden");
     historyPanel?.classList.remove("hidden");
   } else {
     if (accountStatus) accountStatus.textContent = "Guest";
-    if (creditStatus) creditStatus.textContent = "";
     loginOpen?.classList.remove("hidden");
     signupOpen?.classList.remove("hidden");
     logoutButton?.classList.add("hidden");
@@ -130,7 +174,7 @@ function updateAccountUi(user = currentUser) {
     savedChats = [];
     renderChatList();
   }
-  updateModelUi();
+  updateModeUi();
 }
 
 async function authRequest(path, options = {}) {
@@ -560,6 +604,10 @@ chatForm.addEventListener("submit", async (event) => {
 
   const shouldFetchImages = selectedMode() === "fetch" || isImageFetchRequest(message);
   if (shouldFetchImages) {
+    if (!currentUser) {
+      addMessage("ai", "Fetch mode requires an account. Log in to fetch web images.");
+      return;
+    }
     if (!message) {
       addMessage("ai", "Tell me what images to fetch.");
       return;
@@ -594,16 +642,29 @@ chatForm.addEventListener("submit", async (event) => {
       return;
     }
 
+    const imageModel = selectedImageModel();
+    if (imageModel.account && !currentUser) {
+      addMessage("ai", "Athena-I2 image models require an account. Use Athena-I1S or Athena-I1D, or log in.");
+      return;
+    }
+
     setStatus("Generating image");
     setBusy(true, "Generating");
     try {
-      const imageUrl = await generateImage(cleanImagePrompt(message));
+      if (imageModel.creditCost) {
+        await spendImageCredits(imageModel.creditCost);
+      }
+      const imageUrl = await generateImage(cleanImagePrompt(message), imageModel);
       addImageMessage(cleanImagePrompt(message), imageUrl);
-      saveChatMessage("ai", `Generated image: ${cleanImagePrompt(message)}`, [{ title: "Generated image", url: imageUrl }], selectedAthenaModel().label);
+      saveChatMessage("ai", `Generated image: ${cleanImagePrompt(message)}`, [{ title: "Generated image", url: imageUrl }], imageModel.label);
       clearUploads();
       setStatus("Ready");
     } catch (error) {
-      addMessage("ai", `Image generation error: ${error.message}`);
+      if (error.name === "ImageCreditsError") {
+        showCreditDialog();
+      } else {
+        addMessage("ai", `Image generation error: ${error.message}`);
+      }
       setStatus("Error");
     } finally {
       setBusy(false);
@@ -802,28 +863,35 @@ function cleanImageFetchPrompt(message) {
     .trim() || message.trim();
 }
 
-async function generateImage(prompt) {
+async function generateImage(prompt, imageModel = selectedImageModel()) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
   try {
-    const response = await fetch(IMAGE_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt,
-        model: "flux-klein",
-        size: "768x768",
-        quality: "balanced",
-      }),
-      signal: controller.signal,
-    });
+    let lastError = "";
+    for (const variant of imagePromptVariants(prompt, imageModel)) {
+      const response = await fetch(IMAGE_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: variant,
+          model: imageModel.model,
+          size: "768x768",
+          quality: imageModel.quality,
+        }),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      const message = await imageWorkerError(response);
-      throw new Error(message || `Worker returned ${response.status}`);
+      if (response.ok) {
+        return imageResponseUrl(response);
+      }
+
+      lastError = await imageWorkerError(response);
+      if (!isImageSafetyError(lastError)) {
+        throw new Error(lastError || `Worker returned ${response.status}`);
+      }
     }
 
-    return imageResponseUrl(response);
+    throw new Error(lastError || "The image model blocked that prompt.");
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error("Image generation timed out.");
@@ -832,6 +900,54 @@ async function generateImage(prompt) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function spendImageCredits(cost) {
+  try {
+    await authRequest("image-credits/use", {
+      method: "POST",
+      body: JSON.stringify({ cost }),
+    });
+  } catch (error) {
+    if (/402|credit|not enough/i.test(error.message)) {
+      const creditError = new Error("Out of image credits.");
+      creditError.name = "ImageCreditsError";
+      throw creditError;
+    }
+    throw error;
+  }
+}
+
+function showCreditDialog() {
+  if (creditDialog?.showModal) {
+    creditDialog.showModal();
+  } else {
+    addMessage("ai", "You have ran out of credits! Come back tomorrow for more. You can still use I1S and I1D, followed by all of the chat models.");
+  }
+}
+
+function imagePromptVariants(prompt, imageModel = selectedImageModel()) {
+  const clean = String(prompt || "").replace(/\s+/g, " ").trim();
+  const neutral = clean
+    .replace(/\bnsfw\b/gi, "")
+    .replace(/\bsexy\b/gi, "")
+    .trim();
+  const direct = imageModel.direct
+    ? `Detailed polished image, stronger composition, cleaner lighting, more coherent subject: ${neutral}.`
+    : "";
+  const smart = imageModel.smart
+    ? `High quality detailed image with careful composition and accurate visual details: ${neutral}.`
+    : "";
+  return uniqueStrings([
+    clean,
+    direct,
+    smart,
+    `A harmless family-friendly digital illustration of ${neutral}. No text, no violence, no adult content.`,
+  ]);
+}
+
+function isImageSafetyError(message) {
+  return /3030|nsfw|safety|moderation|blocked/i.test(String(message || ""));
 }
 
 async function fetchPublicImages(query) {
@@ -1103,6 +1219,9 @@ function friendlyWorkerError(text) {
   if (message.includes("5028") && message.toLowerCase().includes("deprecated")) {
     return "That Cloudflare vision model is deprecated. Deploy the updated lowframe-media-worker files.";
   }
+  if (isImageSafetyError(message)) {
+    return "The image model blocked the prompt with a safety false positive. Try rewording it more plainly.";
+  }
   return message;
 }
 
@@ -1249,7 +1368,12 @@ async function lookupAnswer(message, model = selectedAthenaModel()) {
 async function smartSynthesizeIfAvailable(message, response, model) {
   if (!model.smart || !currentUser || !response?.answer) return response;
   const cost = model.direct ? 2 : 1;
-  if (smartCredits < cost) return response;
+  if (smartCredits < cost) {
+    return {
+      answer: `${model.label} needs ${cost} smart credit${cost === 1 ? "" : "s"}, and this account is out. Switch to Athena-S1 or Athena-D1 to keep chatting without smart credits.`,
+      sources: [],
+    };
+  }
 
   try {
     setStatus(`Athena ${model.direct ? "direct" : "smart"} thinking`);
@@ -3690,6 +3814,10 @@ for (const button of document.querySelectorAll(".github-auth")) {
   });
 }
 
+for (const input of document.querySelectorAll('input[name="response-mode"]')) {
+  input.addEventListener("change", updateModeUi);
+}
+
 loginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   authMessage("login-message", "Logging in...");
@@ -3773,6 +3901,14 @@ modelSelect?.addEventListener("change", () => {
   updateModelUi();
 });
 
+imageModelSelect?.addEventListener("change", () => {
+  localStorage.setItem(LOWFRAME_IMAGE_MODEL_KEY, imageModelSelect.value);
+  updateModelUi();
+});
+
+closeCreditDialog?.addEventListener("click", () => creditDialog.close());
+creditOk?.addEventListener("click", () => creditDialog.close());
+
 downloadRecovery?.addEventListener("click", () => {
   const blob = new Blob([recoveryCodesText(pendingRecoveryCodes)], { type: "text/plain" });
   const link = document.createElement("a");
@@ -3787,5 +3923,5 @@ downloadRecovery?.addEventListener("click", () => {
 });
 
 handleOAuthReturn();
-updateModelUi();
+updateModeUi();
 refreshAccount();

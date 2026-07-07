@@ -27,10 +27,20 @@
           <div class="upload-row">
             <label class="upload-button" for="image-upload">Upload images</label>
             <input id="image-upload" type="file" accept="image/*" multiple />
+            <div class="mode-toggle" role="group" aria-label="Response mode">
+              <label>
+                <input type="radio" name="response-mode" value="chat" checked />
+                Chat
+              </label>
+              <label>
+                <input type="radio" name="response-mode" value="image" />
+                Image
+              </label>
+            </div>
             <div class="upload-preview" id="upload-preview"></div>
           </div>
           <textarea id="message-input" rows="3" placeholder="Ask a question!"></textarea>
-          <button type="submit">Send</button>
+          <button id="send-button" type="submit">Send</button>
         </form>
       </section>
 

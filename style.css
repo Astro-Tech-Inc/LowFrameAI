@@ -85,8 +85,9 @@ textarea:focus {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 16px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   height: 100vh;
   padding: 16px;
 }
@@ -113,6 +114,15 @@ textarea:focus {
   gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 16px;
+}
+
+.account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 
 .topbar-actions {

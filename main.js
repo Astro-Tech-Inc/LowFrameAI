@@ -1387,7 +1387,7 @@ async function smartSynthesizeIfAvailable(message, response, model) {
   if (!model.smart || !response?.answer) return response;
 
   try {
-    setStatus(`Athena ${model.direct ? "direct" : "smart"} thinking`);
+    setStatus(`${model.label} thinking`);
     const data = await authRequest("ai-chat", {
       method: "POST",
       body: JSON.stringify({
@@ -1398,14 +1398,16 @@ async function smartSynthesizeIfAvailable(message, response, model) {
         model: model.label.toLowerCase(),
       }),
     });
-    smartCredits = Number(data.credits ?? smartCredits);
-    updateAccountUi(currentUser);
+    if (!data.answer) throw new Error("The AI handoff returned no answer.");
     return {
       answer: data.answer,
       sources: response.sources || [],
     };
-  } catch {
-    return response;
+  } catch (error) {
+    return {
+      answer: `${model.label} found sources, but the AI handoff failed before it could combine them: ${error.message}. Make sure lowframe-auth is redeployed with the public /ai-chat endpoint and the Workers AI binding named AI.`,
+      sources: response.sources || [],
+    };
   }
 }
 

@@ -10,6 +10,7 @@ const closeSources = document.querySelector("#close-sources");
 
 const LOWFRAME_MEMORY_KEY = "lowframe_temp_memory_v1";
 const LOWFRAME_MEMORY_LIMIT = 12;
+const API_TIMEOUT_MS = 7000;
 
 let uploadedImages = [];
 let tempMemory = loadTempMemory();
@@ -321,12 +322,25 @@ async function directApiAnswer(message) {
   const results = await Promise.allSettled([
     minecraftServerStatusLookup(message),
     weatherLookup(message),
+    mdnLookup(message),
+    tvMazeLookup(message),
+    jikanLookup(message),
+    pokeLookup(message),
+    nominatimLookup(message),
+    musicBrainzLookup(message),
+    itunesLookup(message),
+    openFoodFactsLookup(message),
+    gbifLookup(message),
+    iNaturalistLookup(message),
+    coinGeckoLookup(message),
+    worldBankLookup(message),
+    universitiesLookup(message),
     dictionaryLookup(message),
     githubLookup(message),
     packageLookup(message),
     countryLookup(message),
     openLibraryLookup(message),
-  ]);
+  ].map((task) => withTimeout(task, API_TIMEOUT_MS)));
   const candidates = results
     .filter((result) => result.status === "fulfilled")
     .flatMap((result) => result.value || [])
@@ -364,7 +378,7 @@ async function lookupAnswer(message) {
       packageLookup(query),
       countryLookup(query),
     ]),
-  ];
+  ].map((task) => withTimeout(task, API_TIMEOUT_MS));
   const results = await Promise.allSettled(tasks);
   const candidates = results
     .filter((result) => result.status === "fulfilled")
@@ -391,7 +405,7 @@ async function lookupAnswer(message) {
   }
 
   return {
-    answer: `I could not find enough source-backed info for "${mainQuery}". Try asking with a more specific name or phrase.`,
+    answer: `I could not find enough source-backed info for "${mainQuery}". ${suggestBetterQuery(mainQuery)}`,
     sources: [],
   };
 }
@@ -508,31 +522,34 @@ async function openLibraryLookup(query) {
   if (!/\b(book|author|novel|isbn|open library)\b/.test(lower)) return [];
   const search = query
     .replace(/^(find|search|look up|what is|tell me about)\s+/i, "")
-    .replace(/\b(book|novel|open library)\b/gi, "")
+    .replace(/\b(book|novel|open library|called|named|title)\b/gi, "")
     .trim();
   if (search.length < 3) return [];
 
-  const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(search)}&limit=5`;
+  const url = `https://openlibrary.org/search.json?title=${encodeURIComponent(search)}&limit=8`;
   const response = await fetch(url);
   if (!response.ok) throw new Error("Open Library lookup failed");
   const data = await response.json();
   return (data.docs || [])
     .filter((book) => book.title)
-    .slice(0, 5)
     .map((book) => {
       const author = book.author_name?.slice(0, 3).join(", ") || "unknown author";
       const year = book.first_publish_year || "unknown year";
       const text = `${book.title} by ${author}, first published ${year}.`;
+      const boost = normalizeTitle(book.title) === normalizeTitle(search) ? 8 : 2;
       return {
         answer: text,
         text: `${text} ${book.subject?.slice(0, 8).join(" ") || ""}`,
+        sourceBoost: boost,
         source: {
           title: `Open Library: ${book.title}`,
           url: book.key ? `https://openlibrary.org${book.key}` : url,
           snippet: text,
         },
       };
-    });
+    })
+    .sort((a, b) => (b.sourceBoost || 0) - (a.sourceBoost || 0))
+    .slice(0, 5);
 }
 
 async function dictionaryLookup(query) {
@@ -843,14 +860,16 @@ async function stackExchangeSiteSearch(site, query) {
     });
 }
 
-async function extraPublicApiLookup(query) {
+async function extraPublicApiLookup(query, includeGeneral = true) {
   const matched = extraApiProviders()
-    .filter((provider) => provider.match(query.toLowerCase()));
+    .filter((provider) => provider.match(query.toLowerCase()))
+    .filter((provider) => includeGeneral || !provider.general)
+    .filter((provider) => !isProblemRequest(query.toLowerCase()) || !["Wikibooks", "Wikiversity"].includes(provider.name));
   const providers = [
     ...matched.filter((provider) => !provider.general),
     ...matched.filter((provider) => provider.general),
   ].slice(0, 16);
-  const results = await Promise.allSettled(providers.map((provider) => provider.lookup(query)));
+  const results = await Promise.allSettled(providers.map((provider) => withTimeout(provider.lookup(query), API_TIMEOUT_MS)));
   return results
     .filter((result) => result.status === "fulfilled")
     .flatMap((result) => result.value || [])
@@ -906,9 +925,30 @@ function extraApiProviders() {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) return null;
-  return response.json();
+  try {
+    const response = await fetchWithTimeout(url, API_TIMEOUT_MS);
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve([]), ms)),
+  ]);
+}
+
+async function fetchWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function apiCandidate(title, url, answer, extra = "", boost = 2) {
@@ -922,7 +962,8 @@ function apiCandidate(title, url, answer, extra = "", boost = 2) {
 }
 
 async function mdnLookup(query) {
-  const url = `https://developer.mozilla.org/api/v1/search?q=${encodeURIComponent(query)}`;
+  if (!/\b(html|css|javascript|web api|browser|dom|fetch|canvas)\b/i.test(query)) return [];
+  const url = `https://developer.mozilla.org/api/v1/search?q=${encodeURIComponent(topicSearchTerm(query, ["web", "api", "browser", "dom"]))}`;
   const data = await fetchJson(url);
   return (data?.documents || []).slice(0, 3).map((item) => apiCandidate(`MDN: ${item.title}`, `https://developer.mozilla.org${item.mdn_url}`, item.summary, item.title, 5)).filter(Boolean);
 }
@@ -975,15 +1016,28 @@ async function pubMedLookup(query) {
 }
 
 async function tvMazeLookup(query) {
-  const url = `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanLookupQuery(query))}`;
+  if (!/\b(tv|show|episode|series|actor)\b/i.test(query)) return [];
+  const term = topicSearchTerm(query, ["tv", "show", "episode", "series", "actor"]);
+  const url = `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(term)}`;
   const data = await fetchJson(url);
-  return (data || []).slice(0, 3).map(({ show }) => apiCandidate(`TVMaze: ${show.name}`, show.url, `${show.name}${show.premiered ? ` premiered ${show.premiered}` : ""}.${show.summary ? ` ${stripHtml(show.summary).slice(0, 220)}` : ""}`, show.genres?.join(" "), 3)).filter(Boolean);
+  return (data || [])
+    .slice(0, 5)
+    .map(({ show }) => apiCandidate(`TVMaze: ${show.name}`, show.url, `${show.name}${show.premiered ? ` premiered ${show.premiered}` : ""}.${show.summary ? ` ${stripHtml(show.summary).slice(0, 220)}` : ""}`, show.genres?.join(" "), normalizeTitle(show.name) === normalizeTitle(term) ? 10 : 3))
+    .filter(Boolean)
+    .sort((a, b) => (b.sourceBoost || 0) - (a.sourceBoost || 0))
+    .slice(0, 3);
 }
 
 async function jikanLookup(query) {
-  const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(cleanLookupQuery(query))}&limit=3`;
+  if (!/\b(anime|manga|mal)\b/i.test(query)) return [];
+  const term = topicSearchTerm(query, ["anime", "manga", "mal"]);
+  const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(term)}&limit=5`;
   const data = await fetchJson(url);
-  return (data?.data || []).map((item) => apiCandidate(`Jikan: ${item.title}`, item.url, `${item.title}${item.year ? ` (${item.year})` : ""}. Score: ${item.score || "unknown"}.${item.synopsis ? ` ${item.synopsis.slice(0, 220)}` : ""}`, "", 3)).filter(Boolean);
+  return (data?.data || [])
+    .map((item) => apiCandidate(`Jikan: ${item.title}`, item.url, `${item.title}${item.year ? ` (${item.year})` : ""}. Score: ${item.score || "unknown"}.${item.synopsis ? ` ${item.synopsis.slice(0, 220)}` : ""}`, "", normalizeTitle(item.title) === normalizeTitle(term) ? 10 : 3))
+    .filter(Boolean)
+    .sort((a, b) => (b.sourceBoost || 0) - (a.sourceBoost || 0))
+    .slice(0, 3);
 }
 
 async function pokeLookup(query) {
@@ -1007,47 +1061,65 @@ async function pokeLookup(query) {
 }
 
 async function nominatimLookup(query) {
+  if (!/\b(address|map|where is|location|located|coordinates|coordinate|geocode)\b/i.test(query)) return [];
   const place = cleanLookupQuery(query)
-    .replace(/\b(where is|coordinates|coordinate|address|map|location|geocode|find|show me)\b/gi, " ")
+    .replace(/\b(where is|coordinates|coordinate|address|map|location|located|locate|geocode|find|show me)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&q=${encodeURIComponent(place || cleanLookupQuery(query))}`;
-  const data = await fetchJson(url);
+  let data = await fetchJson(url);
+  if ((!data || !data.length) && place !== cleanLookupQuery(query)) {
+    data = await fetchJson(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&q=${encodeURIComponent(cleanLookupQuery(query))}`);
+  }
   return (data || []).map((item) => apiCandidate(`OpenStreetMap: ${item.display_name}`, `https://www.openstreetmap.org/${item.osm_type}/${item.osm_id}`, `${item.display_name}. Coordinates: ${item.lat}, ${item.lon}.`, item.type, 3)).filter(Boolean);
 }
 
 async function musicBrainzLookup(query) {
-  const url = `https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent(cleanLookupQuery(query))}&fmt=json&limit=3`;
+  if (!/\b(artist|album|song|band|music)\b/i.test(query)) return [];
+  const url = `https://musicbrainz.org/ws/2/artist/?query=${encodeURIComponent(topicSearchTerm(query, ["music", "artist", "album", "song", "band"]))}&fmt=json&limit=3`;
   const data = await fetchJson(url);
   return (data?.artists || []).map((artist) => apiCandidate(`MusicBrainz: ${artist.name}`, `https://musicbrainz.org/artist/${artist.id}`, `${artist.name}${artist.country ? ` is associated with ${artist.country}` : ""}.${artist.type ? ` Type: ${artist.type}.` : ""}`, artist.disambiguation || "", 3)).filter(Boolean);
 }
 
 async function itunesLookup(query) {
-  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(cleanLookupQuery(query))}&limit=3`;
+  if (!/\b(app|podcast|song|album|movie|itunes)\b/i.test(query)) return [];
+  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(topicSearchTerm(query, ["itunes", "app", "podcast", "song", "album", "movie"]))}&limit=3`;
   const data = await fetchJson(url);
   return (data?.results || []).map((item) => apiCandidate(`iTunes: ${item.trackName || item.collectionName || item.artistName}`, item.trackViewUrl || item.collectionViewUrl || item.artistViewUrl, `${item.trackName || item.collectionName || item.artistName} by ${item.artistName || "unknown artist"}.${item.primaryGenreName ? ` Genre: ${item.primaryGenreName}.` : ""}`, "", 3)).filter(Boolean);
 }
 
 async function openFoodFactsLookup(query) {
-  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(cleanLookupQuery(query))}&search_simple=1&action=process&json=1&page_size=3`;
-  const data = await fetchJson(url);
-  return (data?.products || []).map((item) => apiCandidate(`Open Food Facts: ${item.product_name}`, item.url, `${item.product_name || "Food product"}.${item.nutriscore_grade ? ` Nutri-Score: ${item.nutriscore_grade}.` : ""}${item.brands ? ` Brand: ${item.brands}.` : ""}`, item.ingredients_text || "", 3)).filter(Boolean);
+  if (!/\b(food|barcode|nutrition|calories|ingredient)\b/i.test(query)) return [];
+  const term = topicSearchTerm(query, ["food", "barcode", "nutrition", "calories", "ingredient"]);
+  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(term)}&search_simple=1&action=process&json=1&page_size=5`;
+  let data = await fetchJson(url);
+  if (!data?.products?.length) {
+    data = await fetchJson(`https://world.openfoodfacts.net/api/v2/search?search_terms=${encodeURIComponent(term)}&page_size=5`);
+  }
+  return (data?.products || [])
+    .map((item) => apiCandidate(`Open Food Facts: ${item.product_name}`, item.url, `${item.product_name || "Food product"}.${item.nutriscore_grade ? ` Nutri-Score: ${item.nutriscore_grade}.` : ""}${item.brands ? ` Brand: ${item.brands}.` : ""}`, item.ingredients_text || "", normalizeTitle(item.product_name || "").includes(normalizeTitle(term)) ? 8 : 3))
+    .filter(Boolean)
+    .sort((a, b) => (b.sourceBoost || 0) - (a.sourceBoost || 0))
+    .slice(0, 3);
 }
 
 async function gbifLookup(query) {
-  const url = `https://api.gbif.org/v1/species/search?q=${encodeURIComponent(cleanLookupQuery(query))}&limit=3`;
+  if (!/\b(species|taxonomy|plant|animal|genus|biology)\b/i.test(query)) return [];
+  const url = `https://api.gbif.org/v1/species/search?q=${encodeURIComponent(topicSearchTerm(query, ["species", "taxonomy", "plant", "animal", "genus", "biology"]))}&limit=3`;
   const data = await fetchJson(url);
   return (data?.results || []).map((item) => apiCandidate(`GBIF: ${item.scientificName || item.canonicalName}`, `https://www.gbif.org/species/${item.key}`, `${item.scientificName || item.canonicalName}.${item.kingdom ? ` Kingdom: ${item.kingdom}.` : ""}${item.rank ? ` Rank: ${item.rank}.` : ""}`, "", 3)).filter(Boolean);
 }
 
 async function iNaturalistLookup(query) {
-  const url = `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(cleanLookupQuery(query))}&per_page=3`;
+  if (!/\b(species|plant|animal|wildlife|nature)\b/i.test(query)) return [];
+  const url = `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(topicSearchTerm(query, ["species", "plant", "animal", "wildlife", "nature"]))}&per_page=3`;
   const data = await fetchJson(url);
   return (data?.results || []).map((item) => apiCandidate(`iNaturalist: ${item.preferred_common_name || item.name}`, `https://www.inaturalist.org/taxa/${item.id}`, `${item.preferred_common_name || item.name} is listed as ${item.name}.${item.rank ? ` Rank: ${item.rank}.` : ""}`, "", 3)).filter(Boolean);
 }
 
 async function coinGeckoLookup(query) {
-  const searchUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(cleanLookupQuery(query))}`;
+  if (!/\b(crypto|bitcoin|ethereum|coin|token price)\b/i.test(query)) return [];
+  const searchUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(topicSearchTerm(query, ["crypto", "coin", "token", "price"]))}`;
   const search = await fetchJson(searchUrl);
   const coin = search?.coins?.[0];
   if (!coin) return [];
@@ -1057,14 +1129,17 @@ async function coinGeckoLookup(query) {
 }
 
 async function worldBankLookup(query) {
-  const country = cleanLookupQuery(query).match(/\b[a-z]{2,}\b/i)?.[0] || "world";
+  if (!/\b(gdp|population|economy|world bank|indicator)\b/i.test(query)) return [];
+  const country = worldBankCountryCode(query);
+  if (!country) return [];
   const url = `https://api.worldbank.org/v2/country/${encodeURIComponent(country)}/indicator/SP.POP.TOTL?format=json&per_page=3`;
   const data = await fetchJson(url);
   return (data?.[1] || []).slice(0, 2).map((item) => apiCandidate(`World Bank: ${item.country?.value}`, url, `${item.country?.value} population in ${item.date}: ${item.value ? Number(item.value).toLocaleString() : "unknown"}.`, "population economy indicator", 3)).filter(Boolean);
 }
 
 async function universitiesLookup(query) {
-  const url = `https://universities.hipolabs.com/search?name=${encodeURIComponent(cleanLookupQuery(query))}`;
+  if (!/\b(university|college|school)\b/i.test(query)) return [];
+  const url = `https://universities.hipolabs.com/search?name=${encodeURIComponent(topicSearchTerm(query, ["university", "college", "school"]))}`;
   const data = await fetchJson(url);
   return (data || []).slice(0, 3).map((item) => apiCandidate(`Universities: ${item.name}`, item.web_pages?.[0] || url, `${item.name} is in ${item.country}.${item.domains?.[0] ? ` Domain: ${item.domains[0]}.` : ""}`, "", 3)).filter(Boolean);
 }
@@ -1145,10 +1220,10 @@ async function minecraftWikiLookup(query) {
   if (query.toLowerCase().includes("fandom")) return [];
   if (!query.toLowerCase().includes("minecraft") && !/\brd-\d+\b|\brd\b/i.test(query)) return [];
   return mediaWikiLookup({
-    query,
+    query: query.replace(/\bminecraft\s+wiki\b/gi, "").replace(/\bminecraft\b/gi, "").trim() || query,
     api: "https://minecraft.wiki/api.php",
     title: "Minecraft Wiki",
-    sourceBoost: 2,
+    sourceBoost: 5,
   });
 }
 
@@ -1259,6 +1334,16 @@ function sourceScore(query, candidate) {
   if (url.includes("pypi.org") && /\b(pypi|python package|pip package)\b/.test(lower)) score += 10;
   if (url.includes("openlibrary.org") && /\b(book|author|novel|isbn)\b/.test(lower)) score += 8;
   if (url.includes("openstreetmap.org") && /\b(address|map|where is|location|coordinates|geocode)\b/.test(lower)) score += 10;
+  if (url.includes("openlibrary.org") && exactTitleMatch(query, candidate)) score += 8;
+  if (url.includes("tvmaze.com") && /\b(tv|show|episode|series)\b/.test(lower)) score += 10;
+  if (url.includes("jikan.moe") && /\b(anime|manga|mal)\b/.test(lower)) score += 10;
+  if (url.includes("musicbrainz.org") && /\b(artist|album|song|band|music)\b/.test(lower)) score += 10;
+  if (url.includes("itunes.apple.com") && /\b(itunes|app|podcast|song|album|movie)\b/.test(lower)) score += 10;
+  if (url.includes("openfoodfacts.org") && /\b(food|barcode|nutrition|calories|ingredient)\b/.test(lower)) score += 10;
+  if ((url.includes("gbif.org") || url.includes("inaturalist.org")) && /\b(species|taxonomy|plant|animal|genus|biology|wildlife|nature)\b/.test(lower)) score += 10;
+  if (url.includes("coingecko.com") && /\b(crypto|bitcoin|ethereum|coin|token price)\b/.test(lower)) score += 10;
+  if (url.includes("worldbank.org") && /\b(gdp|population|economy|world bank|indicator)\b/.test(lower)) score += 10;
+  if (url.includes("hipolabs.com") && /\b(university|college|school)\b/.test(lower)) score += 10;
   if ((url.includes("semanticscholar.org") || url.includes("openalex.org") || url.includes("crossref.org") || url.includes("arxiv.org")) && /\b(paper|research|study|journal)\b/.test(lower)) score += 8;
   if (url.includes("pokeapi.co") && /\b(pokemon|pokémon|pokedex)\b/.test(lower)) score += 15;
   if (isPackageSource(url) && /\b(crate|package|library|gem|maven|nuget|docker|brew|cargo|composer)\b/.test(lower)) score += 12;
@@ -1267,6 +1352,33 @@ function sourceScore(query, candidate) {
 
 function isPackageSource(url) {
   return /crates\.io|rubygems\.org|packagist\.org|maven\.org|nuget\.org|docker\.com|formulae\.brew\.sh|npmjs\.com|pypi\.org/.test(url);
+}
+
+function isStructuredSource(url) {
+  return /pokeapi\.co|openstreetmap\.org|api\.mcsrvstat\.us|api\.open-meteo\.com|api\.github\.com|wikidata\.org|tvmaze\.com|jikan\.moe|musicbrainz\.org|itunes\.apple\.com|openfoodfacts\.org|gbif\.org|inaturalist\.org|coingecko\.com|worldbank\.org|hipolabs\.com/.test(url);
+}
+
+function structuredIntentSatisfied(query, best) {
+  const url = best.source?.url || "";
+  const lower = query.toLowerCase();
+
+  if (url.includes("pokeapi.co") && /\b(pokemon|pokémon|pokedex)\b/.test(lower)) return true;
+  if (url.includes("openstreetmap.org") && /\b(address|map|where is|location|located|coordinates|coordinate|geocode)\b/.test(lower)) return true;
+  if (url.includes("api.mcsrvstat.us") && /\b(minecraft|mc|server|ping|status)\b/.test(lower)) return true;
+  if (url.includes("api.open-meteo.com") && /\b(weather|forecast|temperature|temp)\b/.test(lower)) return true;
+  if (url.includes("api.github.com") && /\b(github|repo|repository|user|stars|forks)\b/.test(lower)) return true;
+  if (url.includes("tvmaze.com") && /\b(tv|show|episode|series)\b/.test(lower)) return true;
+  if (url.includes("jikan.moe") && /\b(anime|manga|mal)\b/.test(lower)) return true;
+  if (url.includes("musicbrainz.org") && /\b(artist|album|song|band|music)\b/.test(lower)) return true;
+  if (url.includes("itunes.apple.com") && /\b(itunes|app|podcast|song|album|movie)\b/.test(lower)) return true;
+  if (url.includes("openfoodfacts.org") && /\b(food|barcode|nutrition|calories|ingredient)\b/.test(lower)) return true;
+  if ((url.includes("gbif.org") || url.includes("inaturalist.org")) && /\b(species|taxonomy|plant|animal|genus|biology|wildlife|nature)\b/.test(lower)) return true;
+  if (url.includes("coingecko.com") && /\b(crypto|bitcoin|ethereum|coin|token price)\b/.test(lower)) return true;
+  if (url.includes("worldbank.org") && /\b(gdp|population|economy|world bank|indicator)\b/.test(lower)) return true;
+  if (url.includes("hipolabs.com") && /\b(university|college|school)\b/.test(lower)) return true;
+  if (url.includes("wikidata.org") && scoreCandidate(query, best) >= 8) return true;
+
+  return false;
 }
 
 function importantPhrases(query) {
@@ -1338,6 +1450,41 @@ function cleanLookupQuery(message) {
   return message
     .replace(/^(look up|search for|search|what is|what are|who is|who are|tell me about)\s+/i, "")
     .trim() || message.trim();
+}
+
+function topicSearchTerm(query, removeWords) {
+  const remove = new RegExp(`\\b(${removeWords.map(escapeRegExp).join("|")})\\b`, "gi");
+  return cleanLookupQuery(query)
+    .replace(remove, " ")
+    .replace(/\b(for|about|called|named|info|information|lookup|search|find|the|a|an|of|on)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim() || cleanLookupQuery(query);
+}
+
+function worldBankCountryCode(query) {
+  const raw = topicSearchTerm(query, ["world", "bank", "population", "gdp", "economy", "indicator", "country", "for", "of", "in"]);
+  const normalized = normalizeTitle(raw);
+  const codes = {
+    "united states": "US",
+    "usa": "US",
+    "us": "US",
+    "america": "US",
+    "united kingdom": "GB",
+    "uk": "GB",
+    "great britain": "GB",
+    "france": "FR",
+    "germany": "DE",
+    "japan": "JP",
+    "canada": "CA",
+    "mexico": "MX",
+    "china": "CN",
+    "india": "IN",
+    "brazil": "BR",
+    "australia": "AU",
+    "russia": "RU",
+  };
+  if (/^[a-z]{2,3}$/i.test(raw.trim())) return raw.trim().toUpperCase();
+  return codes[normalized] || "";
 }
 
 function cleanSnippet(snippet) {
@@ -1460,8 +1607,18 @@ function pokedexNumber(query) {
     eighth: 8,
     ninth: 9,
     tenth: 10,
+    eleventh: 11,
+    twelfth: 12,
+    thirteenth: 13,
+    fourteenth: 14,
+    fifteenth: 15,
+    sixteenth: 16,
+    seventeenth: 17,
+    eighteenth: 18,
+    nineteenth: 19,
+    twentieth: 20,
   };
-  const word = lower.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/)?.[1];
+  const word = lower.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth)\b/)?.[1];
   return word ? ordinals[word] : null;
 }
 
@@ -1500,6 +1657,10 @@ function composeAnswer(query, best, candidates = []) {
     return best.source.snippet || plainFact(cleanFact(best.answer));
   }
 
+  if (isPackageSource(best.source?.url || "")) {
+    return best.source.snippet || plainFact(cleanFact(best.answer));
+  }
+
   if (isLinuxDriverQuestion(lower)) {
     return composeLinuxDriverAnswer(query, candidates);
   }
@@ -1513,8 +1674,10 @@ function composeAnswer(query, best, candidates = []) {
     const second = facts.find((fact) => fact !== first && !tooSimilar(fact, first));
     let firstPlain = plainFact(first);
     if (subject && normalizeTitle(firstPlain).startsWith(`${normalizeTitle(subject)} `)) {
-      firstPlain = firstPlain.replace(new RegExp(`^${escapeRegExp(subject)}\\s+(is|are|means)\\s+`, "i"), "");
-      firstPlain = `${subject} is ${firstPlain}`;
+      const withoutCopula = firstPlain.replace(new RegExp(`^${escapeRegExp(subject)}\\s+(is|are|means)\\s+`, "i"), "");
+      if (withoutCopula !== firstPlain) {
+        firstPlain = `${subject} is ${withoutCopula}`;
+      }
     }
     let answer = firstPlain;
     if (second && sourceCount > 1) {
@@ -1613,22 +1776,27 @@ function mismatchReason(query, best, score) {
   const hasSpecificToken = required.some((word) => /[0-9]/.test(word) || word.length >= 6);
   const problemSource = isProblemRequest(query.toLowerCase()) && /stackexchange|stackoverflow|superuser|serverfault/i.test(best.source?.title || best.source?.url || "");
   const packageSource = isPackageSource(best.source?.url || "") && required.some((word) => text.includes(word));
+  const structuredSource = isStructuredSource(best.source?.url || "") && (
+    !required.length ||
+    required.some((word) => text.includes(word)) ||
+    structuredIntentSatisfied(query, best)
+  );
 
   if (problemSource && problemOverlap(query, text) >= 2) {
     return "";
   }
 
-  if (packageSource) {
+  if (packageSource || structuredSource) {
     return "";
   }
 
   if ((score < 5 && !exactTitleMatch(query, best)) || (hasSpecificToken && missing.length)) {
     const terms = missing.length ? missing.join(", ") : required.join(", ");
-    return `I found nearby-looking results, but they did not actually match ${terms}. Try giving me one more clue, like whether it is a player, mod, server, product, or wiki page.`;
+    return `I found nearby-looking results, but they did not actually match ${terms}. ${suggestBetterQuery(query)}`;
   }
 
   if (required.length >= 2 && missing.length >= Math.ceil(required.length / 2)) {
-    return `I found sources around the topic, but not enough of the important words matched. I do not want to pretend the wrong page is the answer.`;
+    return `I found sources around the topic, but not enough of the important words matched. ${suggestBetterQuery(query)}`;
   }
 
   return "";
@@ -1708,11 +1876,81 @@ function requiredKeywords(query) {
     "how", "why", "wiki", "fandom", "lookup", "search", "find", "tell", "about", "bar",
     "paper", "research", "study", "journal", "coordinates", "coordinate", "location", "address",
     "anime", "manga", "pokemon", "pokedex", "crate", "package", "library",
-    "1st", "first", "second", "third", "driver", "drivers", "work", "linux",
+    "driver", "drivers", "work", "linux",
+    "inside", "outside", "within", "into", "onto", "from", "ever", "locate", "located",
+    "called", "named", "show", "give", "get", "please", "exactly", "available",
   ]);
   return keywords(lower)
     .filter((word) => !soft.has(word))
+    .filter((word) => !isOrdinalToken(word))
     .filter((word) => word.length >= 4 || /\d/.test(word));
+}
+
+function suggestBetterQuery(query) {
+  const lower = query.toLowerCase();
+  const cleaned = cleanLookupQuery(query).replace(/[?.!]+$/g, "").trim();
+
+  if (/\b(minecraft|mc)\s+server|server\s+(status|ping)|ping\b/.test(lower)) {
+    return "Try: `ping minecraft server play.example.com`.";
+  }
+  if (/\bweather|forecast|temperature|temp\b/.test(lower)) {
+    return "Try: `weather for New York` or `forecast for London`.";
+  }
+  if (/\bpokemon|pokémon|pokedex\b/.test(lower)) {
+    return "Try: `pokemon pikachu` or `2nd pokemon in pokedex`.";
+  }
+  if (/\bcoordinates|coordinate|where is|location|located|address|map\b/.test(lower)) {
+    return "Try: `where is Eiffel Tower coordinates`.";
+  }
+  if (/\bgithub|github\.com\b/.test(lower)) {
+    return "Try: `github user torvalds` or `github repo microsoft/vscode`.";
+  }
+  if (/\bnpm|pypi|python package|pip package|rust crate|crate|rubygems|ruby gem|packagist|maven|nuget|docker image|homebrew|brew\b/.test(lower)) {
+    return "Try naming the package system, like `npm package react`, `pypi package requests`, or `rust crate serde`.";
+  }
+  if (/\bfandom\b/.test(lower)) {
+    return "Try: `minecraft fandom creeper` or `terraria fandom guide`.";
+  }
+  if (/\bminecraft\b/.test(lower)) {
+    return "Try: `minecraft wiki creeper` or `latest minecraft launcher version`.";
+  }
+  if (/\bbook|novel|author|isbn\b/.test(lower)) {
+    return "Try: `book Dune` or `author Ursula Le Guin`.";
+  }
+  if (/\btv|show|episode|series\b/.test(lower)) {
+    return "Try: `tv show Breaking Bad`.";
+  }
+  if (/\banime|manga|mal\b/.test(lower)) {
+    return "Try: `anime Fullmetal Alchemist`.";
+  }
+  if (/\bartist|album|song|band|music|itunes\b/.test(lower)) {
+    return "Try: `music artist Daft Punk` or `itunes song Hey Jude`.";
+  }
+  if (/\bfood|barcode|nutrition|calories|ingredient\b/.test(lower)) {
+    return "Try: `food Nutella` or `nutrition Coca-Cola`.";
+  }
+  if (/\bspecies|taxonomy|plant|animal|genus|biology|wildlife|nature\b/.test(lower)) {
+    return "Try: `species monarch butterfly`.";
+  }
+  if (/\bcrypto|bitcoin|ethereum|coin|token price\b/.test(lower)) {
+    return "Try: `crypto bitcoin price`.";
+  }
+  if (/\bpopulation|gdp|economy|world bank|indicator\b/.test(lower)) {
+    return "Try: `world bank population United States`.";
+  }
+  if (/\buniversity|college|school\b/.test(lower)) {
+    return "Try: `university Harvard`.";
+  }
+  if (isProblemRequest(lower)) {
+    return `Try describing the symptom and device together, like \`${cleaned} troubleshooting\`.`;
+  }
+
+  return "Try adding the type of thing you mean, like `wiki`, `player`, `server`, `package`, `book`, `movie`, or `company`.";
+}
+
+function isOrdinalToken(word) {
+  return /^(?:\d+)(?:st|nd|rd|th)?$/.test(word) ||
+    /^(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|last|latest|newest|oldest|earliest)$/.test(word);
 }
 
 function friendlyServerAnswer(answer) {
@@ -1894,7 +2132,12 @@ function solveMath(message) {
 }
 
 function isCodeRequest(message) {
-  return /\b(code|program|script|function|app|java|python|javascript|c\+\+|cpp)\b/i.test(message);
+  const lower = message.toLowerCase();
+  return (
+    /\b(make|write|create|build|generate|code)\b.*\b(program|script|app|function|java|python|javascript|c\+\+|cpp)\b/i.test(lower) ||
+    /\b(java|python|javascript|c\+\+|cpp)\b.*\b(program|script|app|function|code)\b/i.test(lower) ||
+    /\b(program|script|app|function|code)\b.*\b(java|python|javascript|c\+\+|cpp)\b/i.test(lower)
+  );
 }
 
 function codeAnswer(message) {

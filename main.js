@@ -17,7 +17,6 @@ const closeAuth = document.querySelector("#close-auth");
 const loginForm = document.querySelector("#login-form");
 const signupForm = document.querySelector("#signup-form");
 const recoverForm = document.querySelector("#recover-form");
-const githubLogin = document.querySelector("#github-login");
 const recoveryDialog = document.querySelector("#recovery-dialog");
 const recoveryCodesEl = document.querySelector("#recovery-codes");
 const downloadRecovery = document.querySelector("#download-recovery");
@@ -3503,9 +3502,11 @@ for (const button of document.querySelectorAll(".auth-tab")) {
   button.addEventListener("click", () => setAuthTab(button.dataset.authTab));
 }
 
-githubLogin?.addEventListener("click", () => {
-  window.location.href = new URL("login/github", AUTH_API_URL).toString();
-});
+for (const button of document.querySelectorAll(".github-auth")) {
+  button.addEventListener("click", () => {
+    window.location.href = new URL("login/github", AUTH_API_URL).toString();
+  });
+}
 
 loginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();

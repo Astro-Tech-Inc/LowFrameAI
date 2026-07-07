@@ -395,7 +395,8 @@ label,
   min-width: 0;
 }
 
-.model-select-label {
+.model-select-label,
+.image-model-select-label {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -403,7 +404,8 @@ label,
   font-size: 13px;
 }
 
-.model-select-label select {
+.model-select-label select,
+.image-model-select-label select {
   width: 150px;
   min-height: 34px;
   padding: 6px 8px;
@@ -702,6 +704,12 @@ dialog header {
 }
 
 .recovery-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.credit-body {
   display: grid;
   gap: 12px;
   padding: 14px;

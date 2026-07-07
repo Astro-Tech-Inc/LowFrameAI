@@ -720,6 +720,9 @@ function friendlyWorkerError(text) {
   if (message.includes("5028") && message.toLowerCase().includes("deprecated")) {
     return "That Cloudflare vision model is deprecated. Deploy the updated lowframe-media-worker files.";
   }
+  if (message.includes("2021") && message.toLowerCase().includes("invalid user credentials")) {
+    return "Cloudflare rejected the video model credentials. In the Cloudflare dashboard, enable/pay for the third-party AI model `vidu/q3-turbo` or switch `VIDEO_MODEL` in `lowframe-media-worker/wrangler.toml` to another video model your account can access.";
+  }
   return message;
 }
 

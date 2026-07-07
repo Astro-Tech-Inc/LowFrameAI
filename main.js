@@ -19,7 +19,7 @@ const MEDIA_API_URL = isLocalHost() ? LOCAL_MEDIA_API_URL : DEPLOYED_MEDIA_API_U
 const IMAGE_TIMEOUT_MS = 60000;
 const UPLOAD_TIMEOUT_MS = 20000;
 const VISION_TIMEOUT_MS = 60000;
-const VIDEO_TIMEOUT_MS = 180000;
+const FETCH_IMAGE_TIMEOUT_MS = 12000;
 
 let uploadedImages = [];
 let tempMemory = loadTempMemory();
@@ -115,7 +115,7 @@ function addImageMessage(prompt, imageUrl) {
   messages.scrollTop = messages.scrollHeight;
 }
 
-function addVideoMessage(prompt, videoUrl) {
+function addFetchedImagesMessage(query, images) {
   const article = document.createElement("article");
   article.className = "message ai";
 
@@ -126,32 +126,51 @@ function addVideoMessage(prompt, videoUrl) {
   const bubble = document.createElement("div");
   bubble.className = "bubble image-bubble";
 
-  const video = document.createElement("video");
-  video.className = "generated-video";
-  video.src = videoUrl;
-  video.controls = true;
-  video.playsInline = true;
-
   const caption = document.createElement("div");
   caption.className = "image-caption";
-  caption.textContent = prompt;
+  caption.textContent = images.length
+    ? `Fetched ${images.length} public image${images.length === 1 ? "" : "s"} for ${query}.`
+    : `I could not find public images for ${query}.`;
 
-  const actions = document.createElement("div");
-  actions.className = "image-actions";
+  const grid = document.createElement("div");
+  grid.className = "fetch-grid";
 
-  const openLink = document.createElement("a");
-  openLink.href = videoUrl;
-  openLink.target = "_blank";
-  openLink.rel = "noreferrer";
-  openLink.textContent = "Open";
+  for (const item of images) {
+    const card = document.createElement("a");
+    card.className = "fetch-card";
+    card.href = item.pageUrl || item.imageUrl;
+    card.target = "_blank";
+    card.rel = "noreferrer";
 
-  const downloadLink = document.createElement("a");
-  downloadLink.href = videoUrl;
-  downloadLink.download = "lowframe-video.mp4";
-  downloadLink.textContent = "Download";
+    const image = document.createElement("img");
+    image.src = item.thumbnail || item.imageUrl;
+    image.alt = item.title || query;
+    image.loading = "lazy";
+    image.referrerPolicy = "no-referrer";
 
-  actions.append(openLink, downloadLink);
-  bubble.append(video, caption, actions);
+    const title = document.createElement("span");
+    title.textContent = item.title || item.source || "Image";
+
+    const source = document.createElement("small");
+    source.textContent = [item.source, item.creator].filter(Boolean).join(" - ");
+
+    card.append(image, title, source);
+    grid.append(card);
+  }
+
+  const sources = document.createElement("div");
+  sources.className = "image-actions";
+  for (const item of images.slice(0, 6)) {
+    const link = document.createElement("a");
+    link.href = item.pageUrl || item.imageUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = item.source || "Source";
+    sources.append(link);
+  }
+
+  bubble.append(caption, grid);
+  if (images.length) bubble.append(sources);
   article.append(speaker, bubble);
   messages.append(article);
   messages.scrollTop = messages.scrollHeight;
@@ -261,23 +280,23 @@ chatForm.addEventListener("submit", async (event) => {
   messageInput.value = "";
   addMessage("user", message || "Uploaded image");
 
-  const shouldGenerateVideo = selectedMode() === "video" || isVideoGenerationRequest(message);
-  if (shouldGenerateVideo) {
+  const shouldFetchImages = selectedMode() === "fetch" || isImageFetchRequest(message);
+  if (shouldFetchImages) {
     if (!message) {
-      addMessage("ai", "Give me a prompt for the video you want.");
+      addMessage("ai", "Tell me what images to fetch.");
       return;
     }
 
-    setStatus("Generating video");
-    setBusy(true, "Generating");
+    setStatus("Fetching images");
+    setBusy(true, "Fetching");
     try {
-      const cleanPrompt = cleanVideoPrompt(message);
-      const videoUrl = await generateVideo(cleanPrompt, uploadedImages);
-      addVideoMessage(cleanPrompt, videoUrl);
+      const query = cleanImageFetchPrompt(message);
+      const images = await fetchPublicImages(query);
+      addFetchedImagesMessage(query, images);
       clearUploads();
       setStatus("Ready");
     } catch (error) {
-      addMessage("ai", `Video generation error: ${error.message}`);
+      addMessage("ai", `Image fetch error: ${error.message}`);
       setStatus("Error");
     } finally {
       setBusy(false);
@@ -477,8 +496,9 @@ function isImageGenerationRequest(message) {
   return /^\s*(generate|create|make|draw|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|icon|scene)\b/i.test(message);
 }
 
-function isVideoGenerationRequest(message) {
-  return /^\s*(generate|create|make|render)\s+(an?\s+)?(video|clip|movie|animation)\b/i.test(message);
+function isImageFetchRequest(message) {
+  return /^\s*(fetch|find|get|search)\s+(images?|pictures?|photos?)\s+(of|for)?\s+/i.test(message) ||
+    /^\s*(fetch|find|get|search)\s+.+\s+(images?|pictures?|photos?)\s*$/i.test(message);
 }
 
 function cleanImagePrompt(message) {
@@ -487,9 +507,11 @@ function cleanImagePrompt(message) {
     .trim() || message.trim();
 }
 
-function cleanVideoPrompt(message) {
+function cleanImageFetchPrompt(message) {
   return String(message)
-    .replace(/^\s*(generate|create|make|render)\s+(an?\s+)?(video|clip|movie|animation)\s*(of|for|showing)?\s*/i, "")
+    .replace(/^\s*(fetch|find|get|search)\s+(images?|pictures?|photos?)\s+(of|for)?\s*/i, "")
+    .replace(/^\s*(fetch|find|get|search)\s*/i, "")
+    .replace(/\s+(images?|pictures?|photos?)\s*$/i, "")
     .trim() || message.trim();
 }
 
@@ -525,41 +547,115 @@ async function generateImage(prompt) {
   }
 }
 
-async function generateVideo(prompt, images = []) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), VIDEO_TIMEOUT_MS);
-  try {
-    const reference = images.find((image) => image.hosted?.url)?.hosted?.url;
-    const response = await fetch(new URL("video", MEDIA_API_URL).toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt,
-        startImage: reference || "",
-        duration: 3,
-        resolution: "540p",
-        aspectRatio: "16:9",
-        audio: false,
-      }),
-      signal: controller.signal,
-    });
+async function fetchPublicImages(query) {
+  const providers = [
+    wikipediaLeadImageLookup(query),
+    wikimediaCommonsImageLookup(query),
+    openverseImageLookup(query),
+  ].map((task) => withTimeout(task, FETCH_IMAGE_TIMEOUT_MS));
 
-    if (!response.ok) {
-      const message = await imageWorkerError(response);
-      throw new Error(message || `Video Worker returned ${response.status}`);
-    }
+  const results = await Promise.allSettled(providers);
+  const images = results
+    .filter((result) => result.status === "fulfilled")
+    .flatMap((result) => result.value || [])
+    .filter((item) => item.imageUrl || item.thumbnail);
 
-    const data = await response.json();
-    if (!data.video) throw new Error("Video Worker did not return a video URL.");
-    return data.video;
-  } catch (error) {
-    if (error.name === "AbortError") {
-      throw new Error("Video generation timed out. Try a shorter prompt or try again later.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  return uniqueFetchedImages(images).slice(0, 12);
+}
+
+async function wikipediaLeadImageLookup(query) {
+  const title = await wikipediaBestTitle(query);
+  if (!title) return [];
+
+  const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+  const data = await fetchJson(url);
+  const imageUrl = data?.originalimage?.source || data?.thumbnail?.source;
+  if (!imageUrl) return [];
+
+  return [{
+    title: data.title || title,
+    imageUrl,
+    thumbnail: data.thumbnail?.source || imageUrl,
+    pageUrl: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`,
+    creator: "",
+    source: "Wikipedia",
+  }];
+}
+
+async function wikipediaBestTitle(query) {
+  const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=1&namespace=0&format=json&origin=*`;
+  const data = await fetchJson(url);
+  return data?.[1]?.[0] || "";
+}
+
+async function wikimediaCommonsImageLookup(query) {
+  const params = new URLSearchParams({
+    action: "query",
+    generator: "search",
+    gsrsearch: `${query} filetype:bitmap`,
+    gsrnamespace: "6",
+    gsrlimit: "10",
+    prop: "imageinfo",
+    iiprop: "url|mime|extmetadata",
+    iiurlwidth: "520",
+    format: "json",
+    origin: "*",
+  });
+  const url = `https://commons.wikimedia.org/w/api.php?${params}`;
+  const data = await fetchJson(url);
+  const pages = Object.values(data?.query?.pages || {});
+
+  return pages
+    .map((page) => {
+      const info = page.imageinfo?.[0];
+      if (!info?.url || !String(info.mime || "").startsWith("image/")) return null;
+      return {
+        title: cleanCommonsTitle(page.title),
+        imageUrl: info.url,
+        thumbnail: info.thumburl || info.url,
+        pageUrl: info.descriptionurl || `https://commons.wikimedia.org/wiki/${encodeURIComponent(page.title)}`,
+        creator: stripHtml(info.extmetadata?.Artist?.value || ""),
+        source: "Wikimedia Commons",
+      };
+    })
+    .filter(Boolean);
+}
+
+async function openverseImageLookup(query) {
+  const params = new URLSearchParams({
+    q: query,
+    page_size: "10",
+    mature: "false",
+  });
+  const url = `https://api.openverse.org/v1/images/?${params}`;
+  const data = await fetchJson(url);
+  return (data?.results || [])
+    .filter((item) => item.url)
+    .map((item) => ({
+      title: item.title || query,
+      imageUrl: item.url,
+      thumbnail: item.thumbnail || item.url,
+      pageUrl: item.foreign_landing_url || item.url,
+      creator: item.creator || "",
+      source: `Openverse${item.provider ? ` / ${item.provider}` : ""}`,
+    }));
+}
+
+function uniqueFetchedImages(images) {
+  const seen = new Set();
+  return images.filter((item) => {
+    const key = item.imageUrl || item.thumbnail;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function cleanCommonsTitle(title) {
+  return String(title || "")
+    .replace(/^File:/i, "")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/_/g, " ");
 }
 
 async function uploadImageFile(file) {
@@ -719,9 +815,6 @@ function friendlyWorkerError(text) {
   }
   if (message.includes("5028") && message.toLowerCase().includes("deprecated")) {
     return "That Cloudflare vision model is deprecated. Deploy the updated lowframe-media-worker files.";
-  }
-  if (message.includes("2021") && message.toLowerCase().includes("invalid user credentials")) {
-    return "Cloudflare rejected the video model credentials. In the Cloudflare dashboard, enable/pay for the third-party AI model `vidu/q3-turbo` or switch `VIDEO_MODEL` in `lowframe-media-worker/wrangler.toml` to another video model your account can access.";
   }
   return message;
 }

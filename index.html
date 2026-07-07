@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LowFrame AI</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="chat-panel" aria-label="LowFrame AI chat">
+        <header class="topbar">
+          <div>
+            <h1>LowFrame AI</h1>
+            <p>Static lookup, code generation, image uploads, and Pollinations image generation.</p>
+          </div>
+          <div class="status" id="status">Ready</div>
+        </header>
+
+        <div class="messages" id="messages" aria-live="polite">
+          <article class="message ai">
+            <div class="speaker">LowFrame AI</div>
+            <div class="bubble">Ask me anything. I do not store memory; I look things up when I need facts.</div>
+          </article>
+        </div>
+
+        <form class="composer" id="chat-form">
+          <div class="upload-row">
+            <label class="upload-button" for="image-upload">Upload images</label>
+            <input id="image-upload" type="file" accept="image/*" multiple />
+            <div class="upload-preview" id="upload-preview"></div>
+          </div>
+          <textarea id="message-input" rows="3" placeholder="Type a message, coding request, web question, or math problem"></textarea>
+          <button type="submit">Send</button>
+        </form>
+      </section>
+
+      <aside class="side-panel" aria-label="Tools">
+        <section class="tool">
+          <h2>Image</h2>
+          <label for="image-prompt">Prompt</label>
+          <textarea id="image-prompt" rows="5" placeholder="A black and white robot reading a Python book, sharp lighting"></textarea>
+          <label for="pollinations-key">Pollinations API key</label>
+          <input id="pollinations-key" type="password" placeholder="sk_..." autocomplete="off" />
+          <div class="row">
+            <button id="image-button" type="button">Generate</button>
+          </div>
+          <div class="image-output" id="image-output"></div>
+        </section>
+      </aside>
+    </main>
+
+    <dialog id="sources-dialog">
+      <header>
+        <h2>Sources</h2>
+        <button id="close-sources" type="button" aria-label="Close">x</button>
+      </header>
+      <div id="sources-list"></div>
+    </dialog>
+
+    <script src="main.js"></script>
+  </body>
+</html>

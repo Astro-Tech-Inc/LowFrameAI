@@ -8,17 +8,18 @@
   </head>
   <body>
     <main class="app-shell">
+      <header class="account-bar" aria-label="Account">
+        <div class="account-status" id="account-status">Guest</div>
+        <button class="ghost-button" id="login-open" type="button">Login</button>
+        <button class="ghost-button" id="signup-open" type="button">Sign up</button>
+        <button class="ghost-button hidden" id="logout-button" type="button">Logout</button>
+      </header>
       <section class="chat-panel" aria-label="LowFrame AI chat">
         <header class="topbar">
           <div>
             <h1>LowFrame AI</h1>
           </div>
-          <div class="topbar-actions">
-            <div class="account-status" id="account-status">Guest</div>
-            <button class="ghost-button" id="login-open" type="button">Login</button>
-            <button class="ghost-button hidden" id="logout-button" type="button">Logout</button>
-            <div class="status" id="status">Ready</div>
-          </div>
+          <div class="status" id="status">Ready</div>
         </header>
 
         <div class="messages" id="messages" aria-live="polite">
@@ -61,3 +62,52 @@
         <button id="close-sources" type="button" aria-label="Close">x</button>
       </header>
       <div id="sources-list"></div>
+    </dialog>
+
+    <dialog id="auth-dialog">
+      <header>
+        <h2>Account</h2>
+        <button id="close-auth" type="button" aria-label="Close">x</button>
+      </header>
+      <div class="auth-tabs" role="tablist" aria-label="Account actions">
+        <button class="auth-tab active" data-auth-tab="login" type="button">Login</button>
+        <button class="auth-tab" data-auth-tab="signup" type="button">Sign up</button>
+        <button class="auth-tab" data-auth-tab="recover" type="button">Recover</button>
+      </div>
+      <form class="auth-panel active" id="login-form" data-auth-panel="login">
+        <label>Email<input id="login-email" type="email" autocomplete="email" required /></label>
+        <label>Password<input id="login-password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit">Login</button>
+        <button class="secondary-button" id="github-login" type="button">Login with GitHub</button>
+        <p class="auth-message" id="login-message"></p>
+      </form>
+      <form class="auth-panel" id="signup-form" data-auth-panel="signup">
+        <label>Username<input id="signup-username" type="text" autocomplete="username" maxlength="40" required /></label>
+        <label>Email<input id="signup-email" type="email" autocomplete="email" required /></label>
+        <label>Password<input id="signup-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <button type="submit">Create account</button>
+        <p class="auth-message" id="signup-message"></p>
+      </form>
+      <form class="auth-panel" id="recover-form" data-auth-panel="recover">
+        <label>Email<input id="recover-email" type="email" autocomplete="email" required /></label>
+        <label>Recovery code<input id="recover-code" type="text" autocomplete="off" required /></label>
+        <label>New password<input id="recover-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <button type="submit">Reset password</button>
+        <p class="auth-message" id="recover-message"></p>
+      </form>
+    </dialog>
+
+    <dialog id="recovery-dialog">
+      <header>
+        <h2>Password Reset Tokens</h2>
+      </header>
+      <div class="recovery-body">
+        <p>You are about to download your account password reset tokens. You cannot reset your password if you lose these. Keep these somewhere safe.</p>
+        <pre id="recovery-codes"></pre>
+        <button id="download-recovery" type="button" disabled>Download and continue</button>
+      </div>
+    </dialog>
+
+    <script src="main.js"></script>
+  </body>
+</html>

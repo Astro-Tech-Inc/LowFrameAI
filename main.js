@@ -8,7 +8,11 @@ const sourcesDialog = document.querySelector("#sources-dialog");
 const sourcesList = document.querySelector("#sources-list");
 const closeSources = document.querySelector("#close-sources");
 
+const LOWFRAME_MEMORY_KEY = "lowframe_temp_memory_v1";
+const LOWFRAME_MEMORY_LIMIT = 12;
+
 let uploadedImages = [];
+let tempMemory = loadTempMemory();
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -154,6 +158,7 @@ chatForm.addEventListener("submit", async (event) => {
   try {
     const response = await staticAnswer(message, uploadedImages);
     addMessage("ai", response.answer, response.sources || []);
+    rememberTurn(message, response);
     clearUploads();
     setStatus("Ready");
   } catch (error) {
@@ -192,6 +197,11 @@ async function staticAnswer(message, images) {
     return { answer: imageMetadataAnswer(images) };
   }
 
+  const correction = await correctionAnswer(message);
+  if (correction) {
+    return correction;
+  }
+
   const greeting = greetingAnswer(message);
   if (greeting) {
     return { answer: greeting };
@@ -221,6 +231,24 @@ async function staticAnswer(message, images) {
 
 function knownStaticAnswer(message) {
   const lower = message.toLowerCase();
+  if (isMinecraftPopularityQuestion(lower)) {
+    return {
+      answer: "There is not one official “everyone liked it most” Minecraft version, but the version people most often talk about as a favorite is Java Edition 1.8.9, especially because of PvP and older server communities. For survival/modded nostalgia, 1.7.10 and 1.12.2 also come up a lot; for modern survival, people often point to 1.16.5 or 1.20.x. So the clean answer is: 1.8.9 is probably the most famous community-favorite, but it depends on whether you mean PvP, mods, or survival.",
+      sources: [
+        {
+          title: "Minecraft Wiki: Java Edition 1.8.9",
+          url: "https://minecraft.wiki/w/Java_Edition_1.8.9",
+          snippet: "Java Edition 1.8.9 is a well-known older Java release used heavily by legacy PvP communities.",
+        },
+        {
+          title: "Minecraft Wiki: Java Edition version history",
+          url: "https://minecraft.wiki/w/Java_Edition_version_history",
+          snippet: "Version history gives context for major Java Edition eras and releases.",
+        },
+      ],
+    };
+  }
+
   if (
     lower.includes("jdk") &&
     lower.includes("lts") &&
@@ -246,7 +274,7 @@ function knownStaticAnswer(message) {
 }
 
 function greetingAnswer(message) {
-  return /^\s*(hi|hello|hey|yo|sup)\s*[!.?]*\s*$/i.test(message) ? "Hi." : "";
+  return /^\s*(hi|hello|hey|yo|sup|greetings)\s*[!.?]*\s*$/i.test(message) ? "Hi. What are we working on?" : "";
 }
 
 function imageMetadataAnswer(images) {
@@ -257,6 +285,36 @@ function imageMetadataAnswer(images) {
     )),
     "Static GitHub Pages cannot run private vision models. For real image understanding, use a hosted backend or a browser-side vision API with your own key.",
   ].join("\n");
+}
+
+async function correctionAnswer(message) {
+  const last = lastMemory();
+  const address = extractServerAddress(message);
+  if (address && last?.intent === "minecraft_server") {
+    const result = await minecraftServerStatusLookup(`ping minecraft server ${address}`);
+    if (!result.length) return null;
+    const candidate = result[0];
+    return {
+      answer: `Good catch. I read the server address as ${address} now. ${friendlyServerAnswer(candidate.answer)}`,
+      sources: [candidate.source],
+    };
+  }
+
+  const correction = message.match(/^\s*(?:not|no,?|actually)\s+(.{3,})$/i)?.[1];
+  if (correction && last?.intent === "minecraft_server") {
+    const fixedAddress = extractServerAddress(correction);
+    if (fixedAddress) {
+      const result = await minecraftServerStatusLookup(`ping minecraft server ${fixedAddress}`);
+      if (result.length) {
+        return {
+          answer: `Got it. I checked ${fixedAddress} instead. ${friendlyServerAnswer(result[0].answer)}`,
+          sources: [result[0].source],
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 async function directApiAnswer(message) {
@@ -277,8 +335,11 @@ async function directApiAnswer(message) {
   if (!candidates.length) return null;
   candidates.sort((a, b) => scoreCandidate(message, b) - scoreCandidate(message, a));
   const best = candidates[0];
+  const answer = best.source?.url?.includes("mcsrvstat.us")
+    ? friendlyServerAnswer(best.answer)
+    : composeAnswer(message, best, candidates);
   return {
-    answer: best.answer,
+    answer,
     sources: uniqueSources(candidates.slice(0, 6).map((candidate) => candidate.source)),
   };
 }
@@ -293,6 +354,7 @@ async function lookupAnswer(message) {
       duckDuckGoLookup(query),
       wikipediaLookup(query),
       wikidataLookup(query),
+      stackExchangeLookup(query),
       minecraftWikiLookup(query),
       fandomWikiLookup(query),
       openLibraryLookup(query),
@@ -311,8 +373,20 @@ async function lookupAnswer(message) {
   if (candidates.length) {
     candidates.sort((a, b) => scoreCandidate(mainQuery, b) - scoreCandidate(mainQuery, a));
     const best = candidates[0];
-    const sources = uniqueSources(candidates.slice(0, 7).map((candidate) => candidate.source));
-    return { answer: best.answer, sources };
+    const bestScore = scoreCandidate(mainQuery, best);
+    const useful = candidates.filter((candidate) => scoreCandidate(mainQuery, candidate) >= Math.max(4, bestScore - 10));
+    const sources = uniqueSources(useful.slice(0, 7).map((candidate) => candidate.source));
+    const mismatch = mismatchReason(mainQuery, best, bestScore);
+    if (mismatch) {
+      return {
+        answer: mismatch,
+        sources,
+      };
+    }
+    return {
+      answer: composeAnswer(mainQuery, best, useful),
+      sources,
+    };
   }
 
   return {
@@ -718,6 +792,53 @@ async function wikidataLookup(query) {
     });
 }
 
+async function stackExchangeLookup(query) {
+  if (!isProblemRequest(query.toLowerCase()) && !/\b(error|exception|troubleshoot|debug|fix|issue|problem|bios|uefi|f1|f2|setup)\b/i.test(query)) {
+    return [];
+  }
+
+  const sites = stackExchangeSites(query);
+  const searches = await Promise.allSettled(sites.map((site) => stackExchangeSiteSearch(site, query)));
+  return searches
+    .filter((result) => result.status === "fulfilled")
+    .flatMap((result) => result.value)
+    .slice(0, 8);
+}
+
+function stackExchangeSites(query) {
+  const lower = query.toLowerCase();
+  if (/\b(code|programming|python|java|javascript|c\+\+|node|npm|pypi|exception|stack trace)\b/.test(lower)) {
+    return ["stackoverflow", "superuser"];
+  }
+  if (/\b(server|network|linux|dns|nginx|apache|ssh)\b/.test(lower)) {
+    return ["serverfault", "superuser", "stackoverflow"];
+  }
+  return ["superuser", "stackoverflow"];
+}
+
+async function stackExchangeSiteSearch(site, query) {
+  const url = `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${encodeURIComponent(query)}&site=${encodeURIComponent(site)}&pagesize=3&filter=withbody`;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return (data.items || [])
+    .filter((item) => item.title && item.link)
+    .map((item) => {
+      const body = stripHtml(item.body || "");
+      const text = `${item.title}. ${body}`.slice(0, 900);
+      return {
+        answer: text,
+        text: `${item.title} ${body} ${(item.tags || []).join(" ")}`,
+        sourceBoost: 5,
+        source: {
+          title: `${site}: ${decodeHtml(item.title)}`,
+          url: item.link,
+          snippet: text,
+        },
+      };
+    });
+}
+
 async function minecraftWikiLookup(query) {
   if (query.toLowerCase().includes("fandom")) return [];
   if (!query.toLowerCase().includes("minecraft") && !/\brd-\d+\b|\brd\b/i.test(query)) return [];
@@ -790,10 +911,18 @@ function scoreCandidate(query, candidate) {
   const overlap = queryWords.filter((word) => textWords.has(word)).length;
   const sourceBonus = sourceScore(query, candidate) + (candidate.sourceBoost || 0);
   const lengthBonus = Math.min((candidate.text || "").length / 400, 1);
+  const titleBonus = exactTitleMatch(query, candidate) ? 8 : 0;
   const exactPhraseBonus = importantPhrases(query)
     .filter((phrase) => candidateText.includes(phrase))
     .length * 4;
-  return overlap * 3 + exactPhraseBonus + intentScore(query, candidateText) + sourceBonus + lengthBonus;
+  return overlap * 3 + titleBonus + exactPhraseBonus + intentScore(query, candidateText) + sourceBonus + lengthBonus;
+}
+
+function exactTitleMatch(query, candidate) {
+  const normalizedQuery = normalizeTitle(cleanLookupQuery(query));
+  const title = candidate.source?.title || "";
+  const normalizedTitle = normalizeTitle(title.includes(":") ? title.split(":").pop() : title);
+  return normalizedQuery && normalizedTitle === normalizedQuery;
 }
 
 function intentScore(query, candidateText) {
@@ -851,6 +980,7 @@ function keywords(text) {
 function lookupQueries(message) {
   const clean = cleanLookupQuery(message);
   const lowered = clean.toLowerCase();
+  const memoryTopic = memoryTopicText();
   const queries = [
     clean,
     clean
@@ -858,6 +988,15 @@ function lookupQueries(message) {
       .replace(/\bofficial\b/gi, "")
       .trim(),
   ];
+
+  if (memoryTopic && looksLikeFollowUp(clean)) {
+    queries.push(`${memoryTopic} ${clean}`);
+    queries.push(`${memoryTopic} ${clean} troubleshooting`);
+  }
+
+  for (const expanded of genericProblemQueries(clean)) {
+    queries.push(expanded);
+  }
 
   if (lowered.includes("minecraft")) {
     queries.push(clean.replace(/\b(on|from)\s+the\s+minecraft\s+wiki\b/gi, "").trim());
@@ -877,7 +1016,7 @@ function lookupQueries(message) {
     }
   }
 
-  return uniqueStrings(queries.filter(Boolean)).slice(0, 8);
+  return uniqueStrings(queries.filter(Boolean)).slice(0, 12);
 }
 
 function cleanLookupQuery(message) {
@@ -890,6 +1029,16 @@ function cleanSnippet(snippet) {
   const template = document.createElement("template");
   template.innerHTML = snippet;
   return (template.content.textContent || snippet).replace(/\s+/g, " ").trim();
+}
+
+function stripHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return (template.content.textContent || html).replace(/\s+/g, " ").trim();
+}
+
+function decodeHtml(html) {
+  return stripHtml(html);
 }
 
 function uniqueStrings(values) {
@@ -906,7 +1055,343 @@ function uniqueSources(sources) {
   });
 }
 
+function genericProblemQueries(query) {
+  const lower = query.toLowerCase();
+  const terms = importantTerms(query).slice(0, 8).join(" ");
+  const queries = [];
+
+  if (isProblemRequest(lower)) {
+    queries.push(`${terms} troubleshooting`);
+    queries.push(`${terms} common causes`);
+    queries.push(`${terms} fix`);
+  }
+
+  if (/\b(pc|computer|desktop|motherboard|gpu|cpu)\b/.test(lower) && /\b(turn on|boot|display|screen|post|power|signal)\b/.test(lower)) {
+    queries.push("pc wont turn on");
+    queries.push("computer not booting");
+    queries.push("computer powers on no display");
+    queries.push("new pc no display no beeps");
+  }
+
+  if (/\b(bios|uefi)\b/.test(lower) && /\b(f1|f2|continue|setup|reset|screen|message)\b/.test(lower)) {
+    queries.push("BIOS reset press F1 F2 continue setup");
+    queries.push("BIOS reset screen press F2 continue");
+  }
+
+  const errorText = quotedText(query) || visibleErrorText(query);
+  if (errorText) {
+    queries.push(`${errorText} meaning`);
+    queries.push(`${errorText} troubleshooting`);
+  }
+
+  const hardware = hardwareTerms(query);
+  if (hardware.length) {
+    queries.push(`${hardware.join(" ")} troubleshooting`);
+    queries.push(`${hardware.join(" ")} known issues`);
+  }
+
+  const product = productTerms(query);
+  if (product.length && isProblemRequest(lower)) {
+    queries.push(`${product.join(" ")} support troubleshooting`);
+  }
+
+  return queries;
+}
+
+function isProblemRequest(lower) {
+  return /\b(won't|wont|will not|can't|cant|cannot|doesn't|doesnt|not working|broken|error|issue|problem|trouble|fix|help|stuck|crash|crashing|offline|failed|failure|no display|no signal|not booting|turn on|boot|bios reset|setup screen)\b/.test(lower);
+}
+
+function importantTerms(text) {
+  const stop = new Set([
+    "with", "that", "this", "have", "has", "the", "and", "but", "from", "into", "onto", "says",
+    "press", "please", "help", "need", "what", "when", "where", "while", "there", "here", "my",
+  ]);
+  return String(text).toLowerCase()
+    .match(/[a-z0-9.+-]{2,}/g)
+    ?.filter((word) => !stop.has(word))
+    .filter((word, index, arr) => arr.indexOf(word) === index) || [];
+}
+
+function hardwareTerms(text) {
+  return importantTerms(text).filter((word) => (
+    /^(rtx|gtx|rx|ryzen|intel|amd|nvidia|radeon|ddr|bios|uefi|cpu|gpu|ram|ssd|hdd|nvme|motherboard|psu)$/.test(word) ||
+    /^[a-z]*\d{3,5}[a-z0-9-]*$/.test(word)
+  ));
+}
+
+function productTerms(text) {
+  return importantTerms(text).filter((word) => /[0-9]/.test(word) || word.length > 5).slice(0, 5);
+}
+
+function visibleErrorText(text) {
+  const match = String(text).match(/\b(error|screen|message|says|code)\b[:\s-]+(.{4,120})$/i);
+  return match?.[2]?.replace(/\s+/g, " ").trim() || "";
+}
+
+function looksLikeFollowUp(text) {
+  const lower = text.toLowerCase();
+  return text.length < 160 && (
+    /^(it|that|this|now|still|also|actually|no|yes|ok|okay)\b/.test(lower) ||
+    /\b(f1|f2|continue|setup|error|screen|message|same|different|instead|now)\b/.test(lower)
+  );
+}
+
+function memoryTopicText() {
+  const recent = tempMemory.slice(-4).reverse().find((item) => item.user && item.intent !== "general");
+  return recent?.user || "";
+}
+
+function composeAnswer(query, best, candidates = []) {
+  const lower = query.toLowerCase();
+  const sourceCount = uniqueSources(candidates.map((candidate) => candidate.source)).length;
+  const subject = answerSubject(query, best);
+  const facts = collectFacts(candidates);
+
+  if (best.source?.url?.includes("mcsrvstat.us")) {
+    return friendlyServerAnswer(best.answer);
+  }
+
+  if (isProblemRequest(lower) && candidates.some(isStackExchangeCandidate)) {
+    return composeProblemAnswer(query, candidates);
+  }
+
+  if (/^(what is|what are|who is|who are|tell me about)\b/i.test(query) || facts.length) {
+    const first = facts[0] || cleanFact(best.answer);
+    const second = facts.find((fact) => fact !== first && !tooSimilar(fact, first));
+    let firstPlain = plainFact(first);
+    if (subject && normalizeTitle(firstPlain).startsWith(`${normalizeTitle(subject)} `)) {
+      firstPlain = firstPlain.replace(new RegExp(`^${escapeRegExp(subject)}\\s+(is|are|means)\\s+`, "i"), "");
+      firstPlain = `${subject} is ${firstPlain}`;
+    }
+    let answer = firstPlain;
+    if (second && sourceCount > 1) {
+      answer += ` ${plainFact(second)}`;
+    }
+    if (sourceCount > 1) {
+      answer += ` I pulled that together from ${sourceCount} sources.`;
+    }
+    return answer;
+  }
+
+  if (lower.includes("how") || lower.includes("why")) {
+    const extra = facts.find((fact) => !tooSimilar(fact, best.answer || ""));
+    return extra
+      ? `Here’s the useful part: ${plainFact(cleanFact(best.answer))} ${plainFact(extra)}`
+      : `Here’s the useful part: ${plainFact(cleanFact(best.answer))}`;
+  }
+
+  return plainFact(cleanFact(best.answer));
+}
+
+function isStackExchangeCandidate(candidate) {
+  return /stackoverflow|superuser|serverfault/i.test(candidate.source?.title || candidate.source?.url || "");
+}
+
+function composeProblemAnswer(query, candidates) {
+  const stackCandidates = candidates.filter(isStackExchangeCandidate);
+  const sourceCount = uniqueSources(stackCandidates.map((candidate) => candidate.source)).length;
+  const titles = stackCandidates.map((candidate) => candidate.source?.title || "").join(" ").toLowerCase();
+  const text = stackCandidates.map((candidate) => `${candidate.source?.title || ""} ${candidate.text || ""}`).join(" ").toLowerCase();
+  const themes = [];
+
+  if (/\b(power|psu|turn on|wont turn|won't turn)\b/.test(text)) themes.push("power delivery");
+  if (/\b(display|monitor|screen|no signal|black screen)\b/.test(text)) themes.push("display/GPU output");
+  if (/\b(boot|bios|uefi|startup|setup)\b/.test(text)) themes.push("BIOS/boot setup");
+  if (/\b(disk|drive|hdd|ssd|sata|nvme)\b/.test(text)) themes.push("drive or cable detection");
+  if (/\b(beep|beeps|ram|memory)\b/.test(text)) themes.push("RAM or motherboard POST checks");
+  if (/\b(driver|nvidia|amd|graphics)\b/.test(text)) themes.push("graphics driver or GPU troubleshooting");
+
+  const uniqueThemes = uniqueStrings(themes);
+  if (!uniqueThemes.length) {
+    return `I found similar troubleshooting threads, but they do not line up cleanly enough for a confident fix. The closest matches are ${summarizeTitles(stackCandidates)}.`;
+  }
+
+  const exactNote = requiredKeywords(query).some((word) => !text.includes(word))
+    ? "I did not find an exact match for every part/model you named, so treat this as a best-match troubleshooting path, not a diagnosis."
+    : "The sources line up pretty well with your symptoms.";
+
+  return `I checked ${sourceCount || stackCandidates.length} troubleshooting sources. The common pattern is ${joinNatural(uniqueThemes)}. ${exactNote} Start with the simplest split-test: remove extras, confirm power connections, try one RAM stick, check whether the machine reaches BIOS, and then narrow from display/GPU versus boot-drive detection based on what appears on screen.`;
+}
+
+function summarizeTitles(candidates) {
+  return candidates
+    .slice(0, 3)
+    .map((candidate) => candidate.source?.title?.replace(/^(superuser|stackoverflow|serverfault):\s*/i, "") || "")
+    .filter(Boolean)
+    .join("; ");
+}
+
+function joinNatural(items) {
+  if (items.length <= 1) return items[0] || "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function mismatchReason(query, best, score) {
+  const required = requiredKeywords(query);
+  const text = `${best.text || ""} ${best.answer || ""} ${best.source?.title || ""}`.toLowerCase();
+  const missing = required.filter((word) => !text.includes(word));
+  const hasSpecificToken = required.some((word) => /[0-9]/.test(word) || word.length >= 6);
+  const problemSource = isProblemRequest(query.toLowerCase()) && /stackexchange|stackoverflow|superuser|serverfault/i.test(best.source?.title || best.source?.url || "");
+
+  if (problemSource && problemOverlap(query, text) >= 2) {
+    return "";
+  }
+
+  if ((score < 5 && !exactTitleMatch(query, best)) || (hasSpecificToken && missing.length)) {
+    const terms = missing.length ? missing.join(", ") : required.join(", ");
+    return `I found nearby-looking results, but they did not actually match ${terms}. Try giving me one more clue, like whether it is a player, mod, server, product, or wiki page.`;
+  }
+
+  if (required.length >= 2 && missing.length >= Math.ceil(required.length / 2)) {
+    return `I found sources around the topic, but not enough of the important words matched. I do not want to pretend the wrong page is the answer.`;
+  }
+
+  return "";
+}
+
+function problemOverlap(query, text) {
+  const problemWords = ["pc", "computer", "desktop", "boot", "turn", "power", "display", "screen", "bios", "setup", "reset", "error", "problem", "issue"];
+  return problemWords.filter((word) => query.toLowerCase().includes(word) && text.includes(word)).length;
+}
+
+function normalizeTitle(text) {
+  return String(text).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function collectFacts(candidates) {
+  const facts = [];
+  for (const candidate of candidates.slice(0, 5)) {
+    for (const sentence of sentenceParts(candidate.answer || candidate.text || "")) {
+      const fact = cleanFact(sentence);
+      if (fact.length > 35 && fact.length < 260 && !facts.some((existing) => tooSimilar(existing, fact))) {
+        facts.push(fact);
+      }
+      if (facts.length >= 3) return facts;
+    }
+  }
+  return facts;
+}
+
+function sentenceParts(text) {
+  return String(text)
+    .replace(/==[^=]+==/g, " ")
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean);
+}
+
+function cleanFact(text) {
+  return String(text)
+    .replace(/\s+/g, " ")
+    .replace(/\s*\[[^\]]+\]\s*/g, " ")
+    .trim();
+}
+
+function plainFact(text) {
+  return text
+    .replace(/the art, application, and practice of creating images by recording light/i, "making images by capturing light")
+    .replace(/either electronically by means of an image sensor, or chemically by means of a light-sensitive material such as photographic film/i, "using either a digital sensor or light-sensitive film")
+    .replace(/^(.+?) is a /i, "$1 is basically a ")
+    .replace(/^(.+?) is an /i, "$1 is basically an ")
+    .replace(/^(.+?) are /i, "$1 are basically ")
+    .trim();
+}
+
+function answerSubject(query, best) {
+  const sourceTitle = best.source?.title || "";
+  const afterColon = sourceTitle.includes(":") ? sourceTitle.split(":").pop().trim() : sourceTitle.trim();
+  if (afterColon && !/duckduckgo|wikidata|wikipedia|api/i.test(afterColon)) return afterColon;
+  return cleanLookupQuery(query).replace(/[?.!]+$/g, "");
+}
+
+function tooSimilar(a, b) {
+  const aWords = new Set(keywords(a));
+  const bWords = new Set(keywords(b));
+  if (!aWords.size || !bWords.size) return false;
+  const overlap = [...aWords].filter((word) => bWords.has(word)).length;
+  return overlap / Math.min(aWords.size, bWords.size) > 0.75;
+}
+
+function requiredKeywords(query) {
+  const lower = query.toLowerCase();
+  const soft = new Set([
+    "minecraft", "server", "version", "liked", "most", "best", "what", "who", "where", "when",
+    "how", "why", "wiki", "fandom", "lookup", "search", "find", "tell", "about", "bar",
+  ]);
+  return keywords(lower)
+    .filter((word) => !soft.has(word))
+    .filter((word) => word.length >= 4 || /\d/.test(word));
+}
+
+function friendlyServerAnswer(answer) {
+  return answer
+    .replace(/^(.+?) is online\. It is running (.+?) at (.+?) with (.+?)\./, "$1 is online. It is running $2 with $4.")
+    .replace("appears to be offline or unreachable from the public ping API", "looks offline from the public ping API");
+}
+
+function loadTempMemory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOWFRAME_MEMORY_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.slice(-LOWFRAME_MEMORY_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveTempMemory() {
+  try {
+    localStorage.setItem(LOWFRAME_MEMORY_KEY, JSON.stringify(tempMemory.slice(-LOWFRAME_MEMORY_LIMIT)));
+  } catch {
+    // Private browsing or storage limits should not break chat.
+  }
+}
+
+function rememberTurn(userMessage, response) {
+  rememberContext({
+    role: "turn",
+    user: userMessage,
+    ai: response.answer,
+    intent: classifyIntent(userMessage, response),
+    sources: (response.sources || []).map((source) => source.url).slice(0, 4),
+  });
+}
+
+function rememberContext(item) {
+  tempMemory.push({ ...item, at: Date.now() });
+  tempMemory = tempMemory.slice(-LOWFRAME_MEMORY_LIMIT);
+  saveTempMemory();
+}
+
+function lastMemory() {
+  return tempMemory[tempMemory.length - 1] || null;
+}
+
+function classifyIntent(message, response = {}) {
+  const lower = message.toLowerCase();
+  if (extractServerAddress(message) || response.sources?.some((source) => source.url?.includes("mcsrvstat.us"))) {
+    return "minecraft_server";
+  }
+  if (isProblemRequest(lower)) return "problem";
+  if (lower.includes("minecraft")) return "minecraft";
+  return "general";
+}
+
+function isMinecraftPopularityQuestion(lower) {
+  return lower.includes("minecraft") &&
+    /\b(version|release|update)\b/.test(lower) &&
+    /\b(liked|favorite|favourite|popular|best|everyone)\b/.test(lower);
+}
+
 function extractServerAddress(query) {
+  const direct = String(query).match(/\b((?:[a-z0-9-]+\.)+[a-z]{2,}|(?:\d{1,3}\.){3}\d{1,3})(?::\d{2,5})?\b/i)?.[0];
+  if (direct) return direct;
+
   const cleaned = query
     .replace(/^https?:\/\//i, "")
     .replace(/\b(minecraft|mc|java|bedrock|server|status|ping|check|is|online|offline|for|of|the|a|an)\b/gi, " ");

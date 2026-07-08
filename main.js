@@ -56,8 +56,8 @@ let pendingRecoveryCodes = [];
 const ATHENA_MODELS = {
   "athena-c1": { label: "Athena-C1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
   "athena-c1d": { label: "Athena-C1D", account: false, deep: true, direct: true, sourceLimit: 30, smart: false },
-  "athena-c2": { label: "Athena-C2", account: false, deep: false, direct: false, sourceLimit: 60, smart: true },
-  "athena-c2d": { label: "Athena-C2D", account: false, deep: true, direct: true, sourceLimit: 120, smart: true },
+  "athena-c2": { label: "Athena-C2", account: true, deep: false, direct: false, sourceLimit: 60, smart: true },
+  "athena-c2d": { label: "Athena-C2D", account: true, deep: true, direct: true, sourceLimit: 120, smart: true },
 };
 
 const ATHENA_IMAGE_MODELS = {
@@ -736,6 +736,13 @@ async function staticAnswer(message, images, model = selectedAthenaModel()) {
     return visionAnswer(message, images).catch((error) => ({
       answer: `I can see the upload, but the vision check failed: ${error.message}\n\n${imageMetadataAnswer(images)}`,
     }));
+  }
+
+  if (model.account && !currentUser) {
+    return {
+      answer: `${model.label} requires an account. Use Athena-C1 or Athena-C1D, or log in.`,
+      sources: [],
+    };
   }
 
   const correction = await correctionAnswer(message);

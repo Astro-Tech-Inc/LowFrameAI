@@ -238,10 +238,22 @@ async function refreshCredits() {
 function handleOAuthReturn() {
   const url = new URL(window.location.href);
   const token = url.searchParams.get("session");
+  const verified = url.searchParams.get("verified");
   if (token) {
     setSessionToken(token);
     url.searchParams.delete("session");
     url.searchParams.delete("login");
+    window.history.replaceState({}, "", url.toString());
+  }
+  if (verified) {
+    const messages = {
+      "1": "Email verified. You can log in now.",
+      expired: "That verification link expired. Use sign up/login again and request a new verification email.",
+      invalid: "That verification link is invalid.",
+      missing_token: "That verification link is missing its token.",
+    };
+    addMessage("ai", messages[verified] || "Email verification finished.");
+    url.searchParams.delete("verified");
     window.history.replaceState({}, "", url.toString());
   }
 }
@@ -3923,12 +3935,11 @@ signupForm?.addEventListener("submit", async (event) => {
         password: document.querySelector("#signup-password").value,
       }),
     });
-    setSessionToken(data.sessionToken);
-    updateAccountUi(data.user);
-    await refreshCredits();
-    await loadChatList();
-    authDialog.close();
-    authMessage("signup-message", "");
+    setSessionToken("");
+    updateAccountUi(null);
+    authMessage("signup-message", data.verificationRequired
+      ? "Check your email to verify the account, then log in."
+      : "Account created. You can log in now.");
     showRecoveryCodes(data.recoveryCodes || []);
   } catch (error) {
     authMessage("signup-message", error.message);

@@ -22,6 +22,8 @@ const closeAuth = document.querySelector("#close-auth");
 const loginForm = document.querySelector("#login-form");
 const signupForm = document.querySelector("#signup-form");
 const recoverForm = document.querySelector("#recover-form");
+const recoverCodeForm = document.querySelector("#recover-code-form");
+const resetForm = document.querySelector("#reset-form");
 const recoveryDialog = document.querySelector("#recovery-dialog");
 const recoveryCodesEl = document.querySelector("#recovery-codes");
 const downloadRecovery = document.querySelector("#download-recovery");
@@ -52,6 +54,7 @@ let smartCredits = 0;
 let currentChatId = "";
 let savedChats = [];
 let pendingRecoveryCodes = [];
+let pendingPasswordResetToken = "";
 
 const ATHENA_MODELS = {
   "athena-c1": { label: "Athena-C1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
@@ -239,6 +242,7 @@ function handleOAuthReturn() {
   const url = new URL(window.location.href);
   const token = url.searchParams.get("session");
   const verified = url.searchParams.get("verified");
+  const resetToken = url.searchParams.get("reset");
   if (token) {
     setSessionToken(token);
     url.searchParams.delete("session");
@@ -255,6 +259,13 @@ function handleOAuthReturn() {
     addMessage("ai", messages[verified] || "Email verification finished.");
     url.searchParams.delete("verified");
     window.history.replaceState({}, "", url.toString());
+  }
+  if (resetToken) {
+    pendingPasswordResetToken = resetToken;
+    url.searchParams.delete("reset");
+    window.history.replaceState({}, "", url.toString());
+    openAuth("reset");
+    authMessage("reset-message", "Enter a new password to finish resetting your account.");
   }
 }
 
@@ -299,7 +310,7 @@ function showRecoveryCodes(codes) {
 
 function recoveryCodesText(codes) {
   return [
-    "LOWFRAME AI PASSWORD RESET TOKENS",
+    "LAST RESORT OF RECOVERING",
     "",
     "Keep these somewhere safe. Each code can only be used once.",
     "",
@@ -3948,21 +3959,58 @@ signupForm?.addEventListener("submit", async (event) => {
 
 recoverForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  authMessage("recover-message", "Resetting password...");
+  authMessage("recover-message", "Sending reset email...");
+  try {
+    await authRequest("request-password-reset", {
+      method: "POST",
+      body: JSON.stringify({
+        email: document.querySelector("#recover-email").value,
+      }),
+    });
+    authMessage("recover-message", "If that account exists, a password reset email was sent.");
+    recoverForm.reset();
+  } catch (error) {
+    authMessage("recover-message", error.message);
+  }
+});
+
+recoverCodeForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  authMessage("recover-code-message", "Resetting password...");
   try {
     await authRequest("recover-password", {
       method: "POST",
       body: JSON.stringify({
-        email: document.querySelector("#recover-email").value,
+        email: document.querySelector("#recover-code-email").value,
         recoveryCode: document.querySelector("#recover-code").value,
-        newPassword: document.querySelector("#recover-password").value,
+        newPassword: document.querySelector("#recover-code-password").value,
       }),
     });
-    authMessage("recover-message", "Password reset. You can log in now.");
-    recoverForm.reset();
+    authMessage("recover-code-message", "Password reset. You can log in now.");
+    recoverCodeForm.reset();
     setAuthTab("login");
   } catch (error) {
-    authMessage("recover-message", error.message);
+    authMessage("recover-code-message", error.message);
+  }
+});
+
+resetForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  authMessage("reset-message", "Changing password...");
+  try {
+    await authRequest("reset-password", {
+      method: "POST",
+      body: JSON.stringify({
+        token: pendingPasswordResetToken,
+        newPassword: document.querySelector("#reset-password").value,
+      }),
+    });
+    pendingPasswordResetToken = "";
+    authMessage("reset-message", "Password changed. You can log in now.");
+    resetForm.reset();
+    setAuthTab("login");
+  } catch (error) {
+    authMessage("reset-message", error.message);
   }
 });
 

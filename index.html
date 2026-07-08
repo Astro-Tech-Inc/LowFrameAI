@@ -97,7 +97,8 @@
       <div class="auth-tabs" role="tablist" aria-label="Account actions">
         <button class="auth-tab active" data-auth-tab="login" type="button">Login</button>
         <button class="auth-tab" data-auth-tab="signup" type="button">Sign up</button>
-        <button class="auth-tab" data-auth-tab="recover" type="button">Recover</button>
+        <button class="auth-tab" data-auth-tab="recover" type="button">Email reset</button>
+        <button class="auth-tab" data-auth-tab="recover-code" type="button">Reset code</button>
       </div>
       <form class="auth-panel active" id="login-form" data-auth-panel="login">
         <label>Email<input id="login-email" type="email" autocomplete="email" required /></label>
@@ -116,19 +117,29 @@
       </form>
       <form class="auth-panel" id="recover-form" data-auth-panel="recover">
         <label>Email<input id="recover-email" type="email" autocomplete="email" required /></label>
-        <label>Recovery code<input id="recover-code" type="text" autocomplete="off" required /></label>
-        <label>New password<input id="recover-password" type="password" autocomplete="new-password" minlength="8" required /></label>
-        <button type="submit">Reset password</button>
+        <button type="submit">Send password reset email</button>
         <p class="auth-message" id="recover-message"></p>
+      </form>
+      <form class="auth-panel" id="recover-code-form" data-auth-panel="recover-code">
+        <label>Email<input id="recover-code-email" type="email" autocomplete="email" required /></label>
+        <label>Reset code<input id="recover-code" type="text" autocomplete="off" required /></label>
+        <label>New password<input id="recover-code-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <button type="submit">Reset with code</button>
+        <p class="auth-message" id="recover-code-message"></p>
+      </form>
+      <form class="auth-panel" id="reset-form" data-auth-panel="reset">
+        <label>New password<input id="reset-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <button type="submit">Change password</button>
+        <p class="auth-message" id="reset-message"></p>
       </form>
     </dialog>
 
     <dialog id="recovery-dialog">
       <header>
-        <h2>Password Reset Tokens</h2>
+        <h2>Last resort of recovering</h2>
       </header>
       <div class="recovery-body">
-        <p>You are about to download your account password reset tokens. You cannot reset your password if you lose these. Keep these somewhere safe.</p>
+        <p>You are about to download your account password reset tokens. If you lose access to your email, this is the only way to reset your password. Keep these somewhere safe.</p>
         <pre id="recovery-codes"></pre>
         <button id="download-recovery" type="button" disabled>Download and continue</button>
       </div>

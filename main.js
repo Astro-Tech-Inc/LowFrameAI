@@ -22,14 +22,19 @@ const closeAuth = document.querySelector("#close-auth");
 const loginForm = document.querySelector("#login-form");
 const signupForm = document.querySelector("#signup-form");
 const recoverForm = document.querySelector("#recover-form");
-const recoverCodeForm = document.querySelector("#recover-code-form");
 const resetForm = document.querySelector("#reset-form");
+const resetMode = document.querySelector("#reset-mode");
+const resetCodeFields = document.querySelector("#reset-code-fields");
+const recoverSubmit = document.querySelector("#recover-submit");
 const recoveryDialog = document.querySelector("#recovery-dialog");
 const recoveryCodesEl = document.querySelector("#recovery-codes");
 const downloadRecovery = document.querySelector("#download-recovery");
 const creditDialog = document.querySelector("#credit-dialog");
 const closeCreditDialog = document.querySelector("#close-credit-dialog");
 const creditOk = document.querySelector("#credit-ok");
+const projectsOpen = document.querySelector("#projects-open");
+const projectsDialog = document.querySelector("#projects-dialog");
+const closeProjectsDialog = document.querySelector("#close-projects-dialog");
 
 const LOWFRAME_MEMORY_KEY = "lowframe_temp_memory_v1";
 const LOWFRAME_MEMORY_LIMIT = 12;
@@ -286,6 +291,12 @@ function setAuthTab(tab) {
 function authMessage(id, text) {
   const el = document.querySelector(`#${id}`);
   if (el) el.textContent = text;
+}
+
+function updateResetModeUi() {
+  const codeMode = resetMode?.value === "code";
+  resetCodeFields?.classList.toggle("hidden", !codeMode);
+  if (recoverSubmit) recoverSubmit.textContent = codeMode ? "Reset with code" : "Send password reset email";
 }
 
 function showRecoveryCodes(codes) {
@@ -3912,6 +3923,8 @@ for (const input of document.querySelectorAll('input[name="response-mode"]')) {
   input.addEventListener("change", updateModeUi);
 }
 
+resetMode?.addEventListener("change", updateResetModeUi);
+
 loginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   authMessage("login-message", "Logging in...");
@@ -3959,38 +3972,34 @@ signupForm?.addEventListener("submit", async (event) => {
 
 recoverForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  authMessage("recover-message", "Sending reset email...");
+  const codeMode = resetMode?.value === "code";
+  authMessage("recover-message", codeMode ? "Resetting password..." : "Sending reset email...");
   try {
-    await authRequest("request-password-reset", {
-      method: "POST",
-      body: JSON.stringify({
-        email: document.querySelector("#recover-email").value,
-      }),
-    });
-    authMessage("recover-message", "If that account exists, a password reset email was sent.");
-    recoverForm.reset();
+    if (codeMode) {
+      await authRequest("recover-password", {
+        method: "POST",
+        body: JSON.stringify({
+          email: document.querySelector("#recover-email").value,
+          recoveryCode: document.querySelector("#recover-code").value,
+          newPassword: document.querySelector("#recover-code-password").value,
+        }),
+      });
+      authMessage("recover-message", "Password reset. You can log in now.");
+      recoverForm.reset();
+      updateResetModeUi();
+      setAuthTab("login");
+    } else {
+      await authRequest("request-password-reset", {
+        method: "POST",
+        body: JSON.stringify({
+          email: document.querySelector("#recover-email").value,
+        }),
+      });
+      authMessage("recover-message", "If that account exists, a password reset email was sent.");
+      recoverForm.reset();
+    }
   } catch (error) {
     authMessage("recover-message", error.message);
-  }
-});
-
-recoverCodeForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  authMessage("recover-code-message", "Resetting password...");
-  try {
-    await authRequest("recover-password", {
-      method: "POST",
-      body: JSON.stringify({
-        email: document.querySelector("#recover-code-email").value,
-        recoveryCode: document.querySelector("#recover-code").value,
-        newPassword: document.querySelector("#recover-code-password").value,
-      }),
-    });
-    authMessage("recover-code-message", "Password reset. You can log in now.");
-    recoverCodeForm.reset();
-    setAuthTab("login");
-  } catch (error) {
-    authMessage("recover-code-message", error.message);
   }
 });
 
@@ -4038,6 +4047,8 @@ imageModelSelect?.addEventListener("change", () => {
 
 closeCreditDialog?.addEventListener("click", () => creditDialog.close());
 creditOk?.addEventListener("click", () => creditDialog.close());
+projectsOpen?.addEventListener("click", () => projectsDialog.showModal());
+closeProjectsDialog?.addEventListener("click", () => projectsDialog.close());
 
 downloadRecovery?.addEventListener("click", () => {
   const blob = new Blob([recoveryCodesText(pendingRecoveryCodes)], { type: "text/plain" });
@@ -4054,4 +4065,5 @@ downloadRecovery?.addEventListener("click", () => {
 
 handleOAuthReturn();
 updateModeUi();
+updateResetModeUi();
 refreshAccount();

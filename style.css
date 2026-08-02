@@ -826,6 +826,49 @@ dialog header {
   padding: 16px;
 }
 
+.projects-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.project-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--panel-2);
+}
+
+.project-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.project-go {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.project-go:hover {
+  background: var(--accent-hover);
+}
+
 #recovery-codes {
   overflow: auto;
   margin: 0;

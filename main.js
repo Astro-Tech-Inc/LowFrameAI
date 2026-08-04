@@ -15,6 +15,14 @@ const logoutButton = document.querySelector("#logout-button");
 const historyPanel = document.querySelector("#history-panel");
 const historyList = document.querySelector("#history-list");
 const newChatButton = document.querySelector("#new-chat");
+const appShell = document.querySelector(".app-shell");
+const sidebarToggle = document.querySelector("#sidebar-toggle");
+const libraryToggle = document.querySelector("#library-toggle");
+const conversation = document.querySelector("#conversation");
+const hero = document.querySelector("#hero");
+const suggestions = document.querySelector("#suggestions");
+const accountAvatar = document.querySelector("#account-avatar");
+const accountPlan = document.querySelector("#account-plan");
 const modelSelect = document.querySelector("#model-select");
 const imageModelSelect = document.querySelector("#image-model-select");
 const authDialog = document.querySelector("#auth-dialog");
@@ -62,11 +70,13 @@ let pendingRecoveryCodes = [];
 let pendingPasswordResetToken = "";
 
 const ATHENA_MODELS = {
-  "athena-c1": { label: "Athena-C1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
-  "athena-c1d": { label: "Athena-C1D", account: false, deep: true, direct: true, sourceLimit: 30, smart: false },
+  "methos-1": { label: "Methos-1", account: false, deep: false, direct: false, sourceLimit: 8, smart: false },
   "athena-c2": { label: "Athena-C2", account: true, deep: false, direct: false, sourceLimit: 60, smart: true },
   "athena-c2d": { label: "Athena-C2D", account: true, deep: true, direct: true, sourceLimit: 120, smart: true },
+  "cavern-1": { label: "Cavern-1", account: true, deep: true, direct: true, sourceLimit: 120, smart: true, lowcodeOnly: true },
 };
+
+const DEFAULT_MODEL = "methos-1";
 
 const ATHENA_IMAGE_MODELS = {
   "athena-i1": { label: "Athena-I1", account: false, creditCost: 0, model: "flux-klein", quality: "balanced", direct: false, smart: false },
@@ -94,9 +104,10 @@ function selectedMode() {
 }
 
 function selectedAthenaModel() {
-  const value = normalizeChatModelKey(modelSelect?.value || localStorage.getItem(LOWFRAME_MODEL_KEY) || "athena-c1");
-  const model = ATHENA_MODELS[value] || ATHENA_MODELS["athena-c1"];
-  if (model.account && !currentUser) return ATHENA_MODELS["athena-c1"];
+  const value = normalizeChatModelKey(modelSelect?.value || localStorage.getItem(LOWFRAME_MODEL_KEY) || DEFAULT_MODEL);
+  const model = ATHENA_MODELS[value] || ATHENA_MODELS[DEFAULT_MODEL];
+  if (model.lowcodeOnly) return ATHENA_MODELS[DEFAULT_MODEL];
+  if (model.account && !currentUser) return ATHENA_MODELS[DEFAULT_MODEL];
   return model;
 }
 
@@ -108,10 +119,12 @@ function selectedImageModel() {
 
 function normalizeChatModelKey(value) {
   return ({
-    "athena-s1": "athena-c1",
-    "athena-s1-d": "athena-c1d",
-    "athena-d1": "athena-c1d",
-    "athena-d1-d": "athena-c1d",
+    "athena-c1": "methos-1",
+    "athena-c1d": "methos-1",
+    "athena-s1": "methos-1",
+    "athena-s1-d": "methos-1",
+    "athena-d1": "methos-1",
+    "athena-d1-d": "methos-1",
     "athena-s2": "athena-c2",
     "athena-s2-d": "athena-c2d",
     "athena-d2": "athena-c2d",
@@ -135,10 +148,11 @@ function updateModelUi() {
     if (saved && ATHENA_MODELS[saved]) modelSelect.value = saved;
     for (const option of modelSelect.options) {
       const model = ATHENA_MODELS[option.value];
-      option.disabled = Boolean(model?.account && !currentUser);
+      option.disabled = Boolean(model?.lowcodeOnly || (model?.account && !currentUser));
     }
-    if (ATHENA_MODELS[modelSelect.value]?.account && !currentUser) {
-      modelSelect.value = "athena-c1";
+    const active = ATHENA_MODELS[modelSelect.value];
+    if (active?.lowcodeOnly || (active?.account && !currentUser)) {
+      modelSelect.value = DEFAULT_MODEL;
     }
     modelSelect.closest(".model-select-label")?.classList.toggle("hidden", mode !== "chat");
   }
@@ -181,13 +195,18 @@ function setSessionToken(token) {
 function updateAccountUi(user = currentUser) {
   currentUser = user;
   if (user) {
-    if (accountStatus) accountStatus.textContent = user.username || user.email || "Account";
+    const name = user.username || user.email || "Account";
+    if (accountStatus) accountStatus.textContent = name;
+    if (accountPlan) accountPlan.textContent = "Signed in";
+    if (accountAvatar) accountAvatar.textContent = name.slice(0, 1).toUpperCase();
     loginOpen?.classList.add("hidden");
     signupOpen?.classList.add("hidden");
     logoutButton?.classList.remove("hidden");
     historyPanel?.classList.remove("hidden");
   } else {
     if (accountStatus) accountStatus.textContent = "Guest";
+    if (accountPlan) accountPlan.textContent = "Not signed in";
+    if (accountAvatar) accountAvatar.textContent = "G";
     loginOpen?.classList.remove("hidden");
     signupOpen?.classList.remove("hidden");
     logoutButton?.classList.add("hidden");
@@ -396,6 +415,7 @@ async function openSavedChat(chatId) {
     for (const item of data.messages || []) {
       addMessage(item.role, item.content, item.sources || []);
     }
+    updateHeroUi();
     renderChatList();
     setStatus("Ready");
   } catch (error) {
@@ -407,8 +427,21 @@ async function openSavedChat(chatId) {
 function startNewChat() {
   currentChatId = "";
   messages.innerHTML = "";
-  addMessage("ai", "Ask a question!");
+  updateHeroUi();
   renderChatList();
+}
+
+/** The hero greeting and suggestion rows only show on an empty conversation. */
+function scrollConversation() {
+  if (conversation) conversation.scrollTop = conversation.scrollHeight;
+}
+
+function updateHeroUi() {
+  const hasMessages = Boolean(messages?.children.length);
+  hero?.classList.toggle("hidden", hasMessages);
+  suggestions?.classList.toggle("hidden", hasMessages);
+  messages?.classList.toggle("hidden", !hasMessages);
+  conversation?.classList.toggle("has-messages", hasMessages);
 }
 
 function addMessage(role, text, sources = []) {
@@ -440,7 +473,8 @@ function addMessage(role, text, sources = []) {
   addCopyButtons(bubble);
   article.append(speaker, bubble);
   messages.append(article);
-  messages.scrollTop = messages.scrollHeight;
+  updateHeroUi();
+  scrollConversation();
 }
 
 function addImageMessage(prompt, imageUrl) {
@@ -481,7 +515,8 @@ function addImageMessage(prompt, imageUrl) {
   bubble.append(image, caption, actions);
   article.append(speaker, bubble);
   messages.append(article);
-  messages.scrollTop = messages.scrollHeight;
+  updateHeroUi();
+  scrollConversation();
 }
 
 function addFetchedImagesMessage(query, images) {
@@ -542,7 +577,8 @@ function addFetchedImagesMessage(query, images) {
   if (images.length) bubble.append(sources);
   article.append(speaker, bubble);
   messages.append(article);
-  messages.scrollTop = messages.scrollHeight;
+  updateHeroUi();
+  scrollConversation();
 }
 
 function showSources(sources) {
@@ -774,7 +810,7 @@ async function staticAnswer(message, images, model = selectedAthenaModel()) {
 
   if (model.account && !currentUser) {
     return {
-      answer: `${model.label} requires an account. Use Athena-C1 or Athena-C1D, or log in.`,
+      answer: `${model.label} requires an account. Use Methos-1, or log in.`,
       sources: [],
     };
   }
@@ -4034,6 +4070,28 @@ logoutButton?.addEventListener("click", async () => {
 });
 
 newChatButton?.addEventListener("click", startNewChat);
+
+sidebarToggle?.addEventListener("click", () => {
+  appShell?.classList.toggle("sidebar-collapsed");
+});
+
+libraryToggle?.addEventListener("click", () => {
+  if (!currentUser) {
+    setStatus("Log in to use the library");
+    return;
+  }
+  historyPanel?.classList.toggle("hidden");
+  libraryToggle.classList.toggle("active", !historyPanel?.classList.contains("hidden"));
+});
+
+for (const suggestion of document.querySelectorAll(".suggestion")) {
+  suggestion.addEventListener("click", () => {
+    messageInput.value = suggestion.dataset.prompt || suggestion.textContent.trim();
+    messageInput.focus();
+  });
+}
+
+updateHeroUi();
 
 modelSelect?.addEventListener("change", () => {
   localStorage.setItem(LOWFRAME_MODEL_KEY, modelSelect.value);

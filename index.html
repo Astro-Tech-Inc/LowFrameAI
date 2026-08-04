@@ -8,78 +8,134 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="account-bar" aria-label="Account">
-        <div class="account-status" id="account-status">Guest</div>
-        <button class="ghost-button" id="login-open" type="button">Login</button>
-        <button class="ghost-button" id="signup-open" type="button">Sign up</button>
-        <button class="ghost-button hidden" id="logout-button" type="button">Logout</button>
-      </header>
-      <aside class="history-panel hidden" id="history-panel" aria-label="Saved chats">
-        <div class="history-header">
-          <h2>Chats</h2>
-          <button class="ghost-button" id="new-chat" type="button">New</button>
+      <aside class="sidebar" id="sidebar" aria-label="Navigation">
+        <div class="sidebar-top">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <button class="icon-button" id="sidebar-toggle" type="button" aria-label="Toggle sidebar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+          </button>
         </div>
-        <div class="history-list" id="history-list"></div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-item" id="new-chat" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            <span>New chat</span>
+          </button>
+          <button class="nav-item" id="library-toggle" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="16" rx="1"/><path d="M17.5 5.5l3.5 14"/></svg>
+            <span>Library</span>
+          </button>
+          <button class="nav-item" id="projects-open" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+            <span>Projects</span>
+          </button>
+        </nav>
+
+        <div class="history-panel hidden" id="history-panel" aria-label="Saved chats">
+          <p class="sidebar-heading">Recents</p>
+          <div class="history-list" id="history-list"></div>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="account-chip" id="account-chip">
+            <div class="avatar" id="account-avatar" aria-hidden="true">G</div>
+            <div class="account-meta">
+              <span class="account-status" id="account-status">Guest</span>
+              <span class="account-plan" id="account-plan">Not signed in</span>
+            </div>
+          </div>
+          <div class="account-actions">
+            <button class="pill-button primary" id="login-open" type="button">Log in</button>
+            <button class="pill-button" id="signup-open" type="button">Sign up</button>
+            <button class="pill-button hidden" id="logout-button" type="button">Log out</button>
+          </div>
+        </div>
       </aside>
+
       <section class="chat-panel" aria-label="LowFrame AI chat">
         <header class="topbar">
-          <div>
-            <h1>LowFrame AI</h1>
+          <div class="mode-toggle" role="group" aria-label="Response mode">
+            <label class="mode-option">
+              <input type="radio" name="response-mode" value="chat" checked />
+              <span>Chat</span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="response-mode" value="image" />
+              <span>Image</span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="response-mode" value="fetch" />
+              <span>Fetch</span>
+            </label>
           </div>
-          <button class="ghost-button" id="projects-open" type="button">More Projects</button>
           <div class="status" id="status">Ready</div>
         </header>
 
-        <div class="messages" id="messages" aria-live="polite">
-          <article class="message ai">
-            <div class="speaker">LowFrame AI</div>
-            <div class="bubble">Ask a question!</div>
-          </article>
+        <div class="conversation" id="conversation">
+          <div class="hero" id="hero">
+            <h1 class="hero-title">What can I do for you?</h1>
+          </div>
+
+          <div class="messages hidden" id="messages" aria-live="polite"></div>
         </div>
 
-        <form class="composer" id="chat-form">
-          <div class="upload-row">
-            <label class="upload-button" for="image-upload">Upload images</label>
-            <input id="image-upload" type="file" accept="image/*" multiple />
-            <div class="mode-toggle" role="group" aria-label="Response mode">
-              <label class="mode-option">
-                <input type="radio" name="response-mode" value="chat" checked />
-                <span>Chat</span>
+        <div class="composer-dock">
+          <form class="composer" id="chat-form">
+            <div class="composer-pill">
+              <label class="attach-button" for="image-upload" aria-label="Upload images">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </label>
-              <label class="mode-option">
-                <input type="radio" name="response-mode" value="image" />
-                <span>Image</span>
+              <input id="image-upload" type="file" accept="image/*" multiple />
+              <textarea id="message-input" rows="1" placeholder="Ask LowFrame AI..."></textarea>
+              <label class="model-select-label">
+                <select id="model-select" aria-label="Model">
+                  <option value="methos-1">Methos-1</option>
+                  <option value="athena-c2">Athena-C2</option>
+                  <option value="athena-c2d">Athena-C2D</option>
+                  <option value="cavern-1" disabled>Cavern-1 (LowCode only)</option>
+                </select>
               </label>
-              <label class="mode-option">
-                <input type="radio" name="response-mode" value="fetch" />
-                <span>Fetch</span>
+              <label class="image-model-select-label hidden">
+                <select id="image-model-select" aria-label="Image model">
+                  <option value="athena-i1">Athena-I1</option>
+                  <option value="athena-i1d">Athena-I1D</option>
+                  <option value="athena-i2">Athena-I2</option>
+                  <option value="athena-i2d">Athena-I2D</option>
+                </select>
               </label>
+              <button id="send-button" type="submit" aria-label="Send">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+              </button>
             </div>
-            <label class="model-select-label">
-              Model
-              <select id="model-select">
-                <option value="athena-c1">Athena-C1</option>
-                <option value="athena-c1d">Athena-C1D</option>
-                <option value="athena-c2">Athena-C2</option>
-                <option value="athena-c2d">Athena-C2D</option>
-              </select>
-            </label>
-            <label class="image-model-select-label hidden">
-              Model
-              <select id="image-model-select">
-                <option value="athena-i1">Athena-I1</option>
-                <option value="athena-i1d">Athena-I1D</option>
-                <option value="athena-i2">Athena-I2</option>
-                <option value="athena-i2d">Athena-I2D</option>
-              </select>
-            </label>
             <div class="upload-preview" id="upload-preview"></div>
-          </div>
-          <textarea id="message-input" rows="3" placeholder="Ask a question!"></textarea>
-          <button id="send-button" type="submit">Send</button>
-        </form>
-      </section>
+          </form>
 
+          <div class="suggestions" id="suggestions">
+            <button class="suggestion" type="button" data-prompt="Highlight the key insights from this report.">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+              <span>Highlight insights from a report</span>
+              <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button class="suggestion" type="button" data-prompt="Turn these notes into a list of action items.">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+              <span>Create action items from notes</span>
+              <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button class="suggestion" type="button" data-prompt="Help me strengthen my debate skills.">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/></svg>
+              <span>Strengthen my debate skills</span>
+              <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button class="suggestion" type="button" data-prompt="Explain a topic I'm curious about.">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"/></svg>
+              <span>Explain something new</span>
+              <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+
+          <p class="dock-footnote">LowFrame AI</p>
+        </div>
+      </section>
     </main>
 
     <dialog id="sources-dialog">

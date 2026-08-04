@@ -17,7 +17,11 @@ const historyList = document.querySelector("#history-list");
 const newChatButton = document.querySelector("#new-chat");
 const appShell = document.querySelector(".app-shell");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
-const libraryToggle = document.querySelector("#library-toggle");
+const searchChatsToggle = document.querySelector("#search-chats-toggle");
+const chatSearchWrap = document.querySelector("#chat-search-wrap");
+const chatSearch = document.querySelector("#chat-search");
+const historyEmpty = document.querySelector("#history-empty");
+const chatBody = document.querySelector("#chat-body");
 const conversation = document.querySelector("#conversation");
 const hero = document.querySelector("#hero");
 const suggestions = document.querySelector("#suggestions");
@@ -95,7 +99,8 @@ function isLocalHost() {
 
 function setBusy(isBusy, label = "Send") {
   sendButton.disabled = isBusy;
-  sendButton.textContent = label;
+  sendButton.setAttribute("aria-label", label);
+  sendButton.title = label;
   messageInput.disabled = isBusy;
 }
 
@@ -364,7 +369,12 @@ async function loadChatList() {
 function renderChatList() {
   if (!historyList) return;
   historyList.innerHTML = "";
-  for (const chat of savedChats) {
+  const term = (chatSearch?.value || "").trim().toLowerCase();
+  const visible = term
+    ? savedChats.filter((chat) => (chat.title || "New chat").toLowerCase().includes(term))
+    : savedChats;
+  historyEmpty?.classList.toggle("hidden", Boolean(visible.length) || !term);
+  for (const chat of visible) {
     const button = document.createElement("button");
     button.className = "history-item";
     button.classList.toggle("active", chat.id === currentChatId);
@@ -441,7 +451,7 @@ function updateHeroUi() {
   hero?.classList.toggle("hidden", hasMessages);
   suggestions?.classList.toggle("hidden", hasMessages);
   messages?.classList.toggle("hidden", !hasMessages);
-  conversation?.classList.toggle("has-messages", hasMessages);
+  chatBody?.classList.toggle("has-messages", hasMessages);
 }
 
 function addMessage(role, text, sources = []) {
@@ -801,6 +811,12 @@ imageUpload.addEventListener("change", async () => {
   }
 });
 
+/**
+ * Normal chat goes straight to the model. The old path ran ~20 public-API
+ * lookups (DuckDuckGo, Wikipedia, ...) and canned preset answers, then only
+ * handed off to Llama for `smart` models — so non-smart models never reached
+ * the LLM at all. Uploads still take the vision path.
+ */
 async function staticAnswer(message, images, model = selectedAthenaModel()) {
   if (images.length) {
     return visionAnswer(message, images).catch((error) => ({
@@ -815,42 +831,16 @@ async function staticAnswer(message, images, model = selectedAthenaModel()) {
     };
   }
 
-  const correction = await correctionAnswer(message);
-  if (correction) {
-    return correction;
-  }
-
-  const greeting = greetingAnswer(message);
-  if (greeting) {
-    return { answer: greeting };
-  }
-
-  const math = solveMath(message);
-  if (math !== null) {
-    return { answer: math };
-  }
-
-  const contextMath = solveContextMath(message);
-  if (contextMath !== null) {
-    return { answer: contextMath };
-  }
-
-  if (isCodeRequest(message)) {
-    return { answer: codeAnswer(message) };
-  }
-
-  const known = knownStaticAnswer(message);
-  if (known) {
-    return known;
-  }
-
-  const direct = await directApiAnswer(message, model);
-  if (direct) {
-    return smartSynthesizeIfAvailable(message, direct, model);
-  }
-
-  const lookup = await lookupAnswer(message, model);
-  return smartSynthesizeIfAvailable(message, lookup, model);
+  const data = await authRequest("ai-chat", {
+    method: "POST",
+    body: JSON.stringify({
+      question: message,
+      history: tempMemory.slice(-8),
+      model: model.label.toLowerCase(),
+    }),
+  });
+  if (!data.answer) throw new Error("The model returned no answer.");
+  return { answer: data.answer, sources: [] };
 }
 
 function knownStaticAnswer(message) {
@@ -4075,14 +4065,22 @@ sidebarToggle?.addEventListener("click", () => {
   appShell?.classList.toggle("sidebar-collapsed");
 });
 
-libraryToggle?.addEventListener("click", () => {
+searchChatsToggle?.addEventListener("click", () => {
   if (!currentUser) {
-    setStatus("Log in to use the library");
+    setStatus("Log in to search your chats");
     return;
   }
-  historyPanel?.classList.toggle("hidden");
-  libraryToggle.classList.toggle("active", !historyPanel?.classList.contains("hidden"));
+  const showing = chatSearchWrap?.classList.toggle("hidden") === false;
+  searchChatsToggle.classList.toggle("active", showing);
+  if (showing) {
+    chatSearch?.focus();
+  } else if (chatSearch) {
+    chatSearch.value = "";
+    renderChatList();
+  }
 });
+
+chatSearch?.addEventListener("input", renderChatList);
 
 for (const suggestion of document.querySelectorAll(".suggestion")) {
   suggestion.addEventListener("click", () => {
